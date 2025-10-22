@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>RTool Control Panel</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>🐉 RTool</h1>
+    <p class="subtitle">Multi-Window Prompter</p>
+  </div>
+  
+  <div class="detach-bar">
+    <button id="detachBtn" class="detach-btn" title="Open as floating window">⤢ Open Floating Panel</button>
+  </div>
+
+  <div class="section">
+    <label>Instances:</label>
+    <select id="instanceCount">
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3" selected>3</option>
+      <option value="4">4</option>
+    </select>
+
+    <label>Site URL:</label>
+    <input type="url" id="siteUrl" placeholder="https://chatgpt.com" value="https://chatgpt.com" />
+    
+    <button id="openBtn" class="primary">Open Windows</button>
+    <button id="closeBtn" class="secondary">Close All</button>
+  </div>
+
+  <div class="section">
+    <label>Prompt:</label>
+    <textarea id="promptInput" rows="3" placeholder="Enter your prompt here..."></textarea>
+    <button id="sendBtn" class="primary">Send to All Windows</button>
+  </div>
+
+  <div class="section">
+    <details open>
+      <summary>Per-Window Transforms</summary>
+      <div id="transformsList"></div>
+    </details>
+  </div>
+
+  <div class="section">
+    <details id="loggingSection">
+      <summary>📊 CSV Logging</summary>
+      <div class="logging-config">
+        <div class="setup-info">
+          <p>Log all prompts and transforms to exportable CSV</p>
+        </div>
+        
+        <label class="checkbox-label">
+          <input type="checkbox" id="enableLogging" />
+          <span>Enable logging</span>
+        </label>
+        
+        <div class="logging-status" id="loggingStatus">0 entries logged</div>
+        
+        <div class="button-group">
+          <button id="exportCsvBtn" class="primary">📥 Export CSV</button>
+          <button id="clearLogsBtn" class="secondary">🗑 Clear Logs</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

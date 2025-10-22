@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "RTool - Multi-Window Prompter",
+  "version": "1.0.0",
+  "description": "Multi-instance web automation tool with Parseltongue transforms",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "RTool - Click to open control panel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
+
