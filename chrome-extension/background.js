@@ -232,22 +232,43 @@ async function handleOpenWindows(count, url) {
     rtoolWindows = createdWindows;
     console.log('[RTool BG] rtoolWindows array set to:', rtoolWindows);
     
-    // Wait for all tabs to finish loading and inject content script
+    // Wait for all tabs to finish loading and verify content script
     console.log('[RTool BG] Waiting for tabs to load...');
     for (const win of createdWindows) {
       try {
         // Wait for tab to finish loading
         await waitForTabLoad(win.tabId);
+        console.log(`[RTool BG] Tab ${win.tabId} finished loading`);
         
-        // Manually inject content script to ensure it's loaded
-        await chrome.scripting.executeScript({
-          target: { tabId: win.tabId },
-          files: ['content.js']
-        });
+        // Wait a bit more for content script auto-injection
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        console.log(`[RTool BG] Tab ${win.tabId} loaded and content script injected`);
+        // Test if content script is responding
+        try {
+          await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+          console.log(`[RTool BG] Tab ${win.tabId} content script responding`);
+        } catch (pingError) {
+          console.warn(`[RTool BG] Tab ${win.tabId} content script not responding, attempting manual injection...`);
+          
+          // Manually inject content script
+          await chrome.scripting.executeScript({
+            target: { tabId: win.tabId },
+            files: ['content.js']
+          });
+          
+          console.log(`[RTool BG] Tab ${win.tabId} content script manually injected`);
+          
+          // Test again
+          await new Promise(resolve => setTimeout(resolve, 500));
+          try {
+            await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+            console.log(`[RTool BG] Tab ${win.tabId} now responding`);
+          } catch (retestError) {
+            console.error(`[RTool BG] Tab ${win.tabId} still not responding after manual injection:`, retestError);
+          }
+        }
       } catch (error) {
-        console.warn(`[RTool BG] Failed to inject content script in tab ${win.tabId}:`, error);
+        console.error(`[RTool BG] Failed to initialize tab ${win.tabId}:`, error);
       }
     }
     

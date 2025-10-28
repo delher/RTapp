@@ -15,6 +15,12 @@ let isLoggingResponse = false; // Prevent concurrent logging
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'ping') {
+    // Quick health check
+    sendResponse({ status: 'ready' });
+    return false;
+  }
+  
   if (request.action === 'injectPrompt') {
     console.log('[RTool] Received inject prompt request');
     windowIndex = request.windowIndex;
