@@ -26,33 +26,27 @@ const SITE_CONFIGS = {
     name: 'Gemini',
     url: 'https://gemini.google.com/',
     detection: {
-      // Multiple detection strategies - more flexible selectors
+      // Focus on actual response containers, not thinking sections
       messageSelectors: [
-        '[class*="message"]',
-        '[class*="query"]',
+        // Primary: Look for actual response containers
         '[class*="response"]',
-        '[data-message-id]',
-        '[role="row"]',
-        '.message',
-        '.query',
-        '.response',
-        'message-content'
+        '[data-response-id]',
+        '[class*="message-content"]',
+        // Fallback: General message containers
+        '[class*="message"]',
+        '[data-message-id]'
       ],
       containerSelectors: [
         '[class*="conversation"]',
-        '[class*="chat"]',
-        '[class*="thread"]',
+        '[class*="chat-history"]',
         'main',
-        '[role="main"]',
-        '.conversation',
-        '.chat-history',
-        'chat-window'
+        '[role="main"]'
       ],
       roleIndicators: {
         user: ['user', 'query', 'human', 'you'],
         assistant: ['model', 'assistant', 'bot', 'response', 'gemini', 'ai']
       },
-      
+
       // Completion detection
       streamingClasses: ['streaming', 'generating'],
       completionButtons: [
@@ -62,57 +56,73 @@ const SITE_CONFIGS = {
       ]
     },
     filtering: {
-      // Minimum response length to log (filters out streaming status messages)
-      minResponseLength: 10,  // Responses must be at least 10 chars
-      
-      // Filter out Gemini's thinking sections and streaming status messages
+      // Minimum response length (very short messages are likely thinking phases)
+      minResponseLength: 50,  // Responses must be at least 50 chars
+
+      // Structural filtering - identify thinking messages by DOM structure
+      skipSelectors: [
+        // Thinking/reasoning sections
+        '[aria-label*="thinking" i]',
+        '[aria-label*="reasoning" i]',
+        '[data-thinking="true"]',
+        '[data-reasoning="true"]',
+
+        // Collapsible/expandable sections
+        '[aria-expanded="false"]',
+        '[data-collapsed="true"]',
+        'details:not([open])',
+        '.thinking-section',
+        '.reasoning-block',
+
+        // Headers and intermediate steps
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        '[class*="header"]',
+        '[class*="title"]',
+        '[role="heading"]',
+
+        // Progress indicators
+        '[class*="progress"]',
+        '[class*="loading"]',
+        '[class*="spinner"]',
+        '[aria-label*="loading" i]',
+
+        // Gemini-specific thinking containers
+        '[class*="thinking-container"]',
+        '[class*="analysis-section"]',
+        '[data-step-type="thinking"]',
+        '[data-step-type="analysis"]'
+      ],
+
+      // Content-based filtering for remaining edge cases
       skipPatterns: [
-        { type: 'class', values: ['thinking', 'reasoning', 'expandable', 'collapsible'] },
-        { type: 'aria-label', values: ['thinking', 'show thinking', 'reasoning'] },
-        { 
+        {
           type: 'content',
-          maxLength: 150,  // Filter short messages that match these patterns
+          maxLength: 200,  // Only check short content
           keywords: [
-            // Core thinking keywords
-            'thinking', 'reasoning', 'analyzing', 'interpreting', 
-            'pinpointing', 'considering', 'evaluating', 'examining', 
-            'assessing', 'exploring', 'investigating',
-            
-            // Header patterns
-            'sources', 'references', 'citations',
-            
-            // Intent/analysis patterns
-            'intent', 'noise', 'patterns', 'cipher',
-            'despite', 'recent studies', 'breakdown',
-            
-            // Common Gemini thinking prefixes
-            'analyzing ', 'interpreting ', 'considering ',
-            'examining ', 'evaluating ', 'pinpointing ',
-            'exploring ', 'investigating ',
-            
-            // Streaming status messages (these appear during response generation)
-            'constructing', 'discovering', 'gathering', 'finalizing',
-            'preparing', 'compiling', 'assembling', 'building',
-            'draft', 'details', 'intel', 'knowledge', 'information',
+            // Explicit thinking indicators
+            'thinking', 'reasoning', 'analyzing', 'interpreting',
+            'considering', 'evaluating', 'examining', 'exploring',
+            'investigating', 'processing', 'working', 'searching',
+            'finding', 'locating', 'identifying', 'seeking',
+
+            // Status messages
+            'constructing', 'gathering', 'finalizing', 'preparing',
+            'compiling', 'assembling', 'building', 'draft',
+            'details', 'intel', 'knowledge', 'information',
+
+            // Time indicators
             'just a sec', 'one moment', 'please wait',
 
-            // Additional thinking/analysis phases
-            'seeking', 'analyzing', 'exploring', 'investigating', 'examining',
-            'researching', 'searching', 'finding', 'locating', 'identifying',
-            'processing', 'working', 'thinking', 'reasoning', 'considering'
+            // Gemini-specific patterns
+            'analyzing ', 'interpreting ', 'considering ',
+            'examining ', 'evaluating ', 'exploring ',
+            'investigating ', 'processing ', 'working '
           ]
         }
       ],
-      skipSelectors: [
-        '[aria-label*="thinking" i]',
-        '[aria-label*="reasoning" i]',
-        '[class*="thinking"]',
-        '[class*="reasoning"]',
-        '[data-expanded]',  // Expandable sections
-        'button[aria-expanded]'  // Collapsible elements
-      ],
-      // Additional filtering: skip very short messages that look like headers
-      minContentLength: 150  // Skip messages shorter than 150 chars if they match patterns
+
+      // Minimum content length for filtering
+      minContentLength: 200  // Skip messages shorter than 200 chars if they match patterns
     }
   },
   

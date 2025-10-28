@@ -186,93 +186,91 @@ function extractContent(element, selectors) {
 // Check if message should be skipped based on filtering rules
 function shouldSkipMessage(element, content, filtering) {
   if (!filtering) return false;
-  
-  // Check minimum response length (hard filter for very short responses)
+
+  // PRIORITY 1: Check skip selectors (structural filtering)
+  // This is the most reliable way to identify thinking sections
+  if (filtering.skipSelectors) {
+    for (const selector of filtering.skipSelectors) {
+      try {
+        // Check element itself and all ancestors
+        if (element.matches(selector) || element.closest(selector)) {
+          console.log(`[RTool] Skipping message (structural filter '${selector}'): ${content.substring(0, 50)}`);
+          return true;
+        }
+      } catch (e) {
+        // Ignore invalid selectors
+        console.warn(`[RTool] Invalid selector: ${selector}`);
+      }
+    }
+  }
+
+  // PRIORITY 2: Check minimum response length (hard filter)
   if (filtering.minResponseLength && content.length < filtering.minResponseLength) {
     console.log(`[RTool] Skipping response too short (${content.length} < ${filtering.minResponseLength}): "${content}"`);
     return true;
   }
-  
-  // Check minimum content length for short messages
-  if (filtering.minContentLength && content.length < filtering.minContentLength) {
-    // For short messages, be extra aggressive with filtering
-    const textLower = content.toLowerCase();
-    
-    // Skip if it contains ANY thinking-related keyword
-    const thinkingKeywords = [
-      'thinking', 'reasoning', 'analyzing', 'interpreting', 'sources',
-      'intent', 'noise', 'pattern', 'cipher', 'studies',
-      'constructing', 'discovering', 'gathering', 'finalizing', 'draft', 'details', 'intel', 'knowledge'
-    ];
-    
-    for (const keyword of thinkingKeywords) {
-      if (textLower.includes(keyword)) {
-        console.log(`[RTool] Skipping short message with keyword '${keyword}': ${content.substring(0, 50)}`);
-        return true;
-      }
-    }
-  }
-  
-  if (!filtering.skipPatterns) return false;
-  
-  for (const pattern of filtering.skipPatterns) {
-    if (pattern.type === 'class') {
-      const classList = element.className?.toLowerCase() || '';
-      const parentClass = element.parentElement?.className?.toLowerCase() || '';
-      const combined = classList + ' ' + parentClass;
-      
-      for (const value of pattern.values) {
-        if (combined.includes(value)) {
-          console.log(`[RTool] Skipping message (class filter '${value}'): ${content.substring(0, 50)}`);
-          return true;
+
+  // PRIORITY 3: Content-based filtering for remaining edge cases
+  if (filtering.skipPatterns) {
+    for (const pattern of filtering.skipPatterns) {
+      if (pattern.type === 'content' && pattern.keywords) {
+        const textLower = content.toLowerCase();
+        const maxLength = pattern.maxLength || 999999;
+
+        // Only check content filtering for short messages
+        if (content.length <= maxLength) {
+          for (const keyword of pattern.keywords) {
+            const keywordLower = keyword.toLowerCase();
+            if (textLower.includes(keywordLower)) {
+              console.log(`[RTool] Skipping message (content filter '${keyword}'): ${content.substring(0, 50)}`);
+              return true;
+            }
+          }
         }
       }
-    }
-    
-    if (pattern.type === 'aria-label') {
-      const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
-      const parentLabel = element.parentElement?.getAttribute('aria-label')?.toLowerCase() || '';
-      const combined = ariaLabel + ' ' + parentLabel;
-      
-      for (const value of pattern.values) {
-        if (combined.includes(value)) {
-          console.log(`[RTool] Skipping message (aria-label filter '${value}'): ${content.substring(0, 50)}`);
-          return true;
+
+      if (pattern.type === 'class') {
+        const classList = element.className?.toLowerCase() || '';
+        const parentClass = element.parentElement?.className?.toLowerCase() || '';
+        const combined = classList + ' ' + parentClass;
+
+        for (const value of pattern.values) {
+          if (combined.includes(value)) {
+            console.log(`[RTool] Skipping message (class filter '${value}'): ${content.substring(0, 50)}`);
+            return true;
+          }
         }
       }
-    }
-    
-    if (pattern.type === 'content' && pattern.keywords) {
-      const textLower = content.toLowerCase();
-      const maxLength = pattern.maxLength || 999999;
-      
-      if (content.length <= maxLength) {
-        for (const keyword of pattern.keywords) {
-          const keywordLower = keyword.toLowerCase();
-          if (textLower.includes(keywordLower)) {
-            console.log(`[RTool] Skipping message (content filter '${keyword}'): ${content.substring(0, 50)}`);
+
+      if (pattern.type === 'aria-label') {
+        const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
+        const parentLabel = element.parentElement?.getAttribute('aria-label')?.toLowerCase() || '';
+        const combined = ariaLabel + ' ' + parentLabel;
+
+        for (const value of pattern.values) {
+          if (combined.includes(value)) {
+            console.log(`[RTool] Skipping message (aria-label filter '${value}'): ${content.substring(0, 50)}`);
             return true;
           }
         }
       }
     }
   }
-  
-  // Check skip selectors (for parent and ancestor elements)
-  if (filtering.skipSelectors) {
-    for (const selector of filtering.skipSelectors) {
-      try {
-        // Check element itself and all parents
-        if (element.matches(selector) || element.closest(selector)) {
-          console.log(`[RTool] Skipping message (selector filter '${selector}'): ${content.substring(0, 50)}`);
-          return true;
-        }
-      } catch (e) {
-        // Ignore selector errors
+
+  // PRIORITY 4: Minimum content length filtering
+  if (filtering.minContentLength && content.length < filtering.minContentLength) {
+    const textLower = content.toLowerCase();
+
+    // For very short messages, check for thinking indicators
+    const thinkingIndicators = ['thinking', 'analyzing', 'processing', 'working'];
+    for (const indicator of thinkingIndicators) {
+      if (textLower.includes(indicator)) {
+        console.log(`[RTool] Skipping short thinking message: ${content.substring(0, 50)}`);
+        return true;
       }
     }
   }
-  
+
   return false;
 }
 
