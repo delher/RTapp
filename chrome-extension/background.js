@@ -252,10 +252,10 @@ async function handleOpenWindows(count, url, siteKey) {
         } catch (pingError) {
           console.warn(`[RTool BG] Tab ${win.tabId} content script not responding, attempting manual injection...`);
           
-          // Manually inject site configs and content script
+          // Manually inject site configs, extraction logic, and content script
           await chrome.scripting.executeScript({
             target: { tabId: win.tabId },
-            files: ['site-configs.js', 'content.js']
+            files: ['site-configs.js', 'content-extraction.js', 'content.js']
           });
           
           console.log(`[RTool BG] Tab ${win.tabId} content script manually injected`);
@@ -343,7 +343,7 @@ async function handleSendPrompt(prompt, transforms) {
           try {
             await chrome.scripting.executeScript({
               target: { tabId: win.tabId },
-              files: ['site-configs.js', 'content.js']
+              files: ['site-configs.js', 'content-extraction.js', 'content.js']
             });
             console.log(`[RTool BG] Re-injected content script into tab ${win.tabId}`);
             

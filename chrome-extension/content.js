@@ -322,34 +322,52 @@ function startConversationMonitoring() {
   console.log('[RTool] Conversation monitoring started');
 }
 
-// Check if response streaming is complete
+// Check if response streaming is complete (config-driven)
 function isResponseComplete() {
-  // ChatGPT: Look for "Stop generating" button (present while streaming)
-  const stopButton = document.querySelector('button[aria-label*="Stop" i]');
-  if (stopButton) {
-    console.log('[RTool] Response incomplete: Stop button found');
-    return false; // Still streaming
+  if (!currentSiteConfig || !currentSiteConfig.detection) {
+    console.log('[RTool] No site config, relying on debounce');
+    return false;
   }
   
-  // ChatGPT: Look for regenerate button (appears when done)
-  const regenerateButton = document.querySelector('button[aria-label*="Regenerate" i]');
-  if (regenerateButton) {
-    console.log('[RTool] Response complete: Regenerate button found');
-    return true; // Complete
+  const detection = currentSiteConfig.detection;
+  
+  // Check for "Stop" button (indicates still streaming)
+  if (detection.stopButton) {
+    const stopButton = document.querySelector(detection.stopButton);
+    if (stopButton) {
+      console.log('[RTool] Response incomplete: Stop button found');
+      return false;
+    }
   }
   
-  // Gemini: Look for streaming classes
-  const streamingIndicators = document.querySelectorAll('[class*="streaming"], [class*="generating"]');
-  if (streamingIndicators.length > 0) {
-    console.log('[RTool] Response incomplete:', streamingIndicators.length, 'streaming indicators');
-    return false; // Still streaming
+  // Check for regenerate button (indicates complete for ChatGPT)
+  if (detection.regenerateButton) {
+    const regenerateButton = document.querySelector(detection.regenerateButton);
+    if (regenerateButton) {
+      console.log('[RTool] Response complete: Regenerate button found');
+      return true;
+    }
   }
   
-  // Gemini: Look for action buttons that appear when done
-  const actionButtons = document.querySelectorAll('button[aria-label*="Copy" i], button[title*="Copy" i], button[aria-label*="Share" i]');
-  if (actionButtons.length > 0) {
-    console.log('[RTool] Response complete: Found', actionButtons.length, 'action buttons (Gemini)');
-    return true; // Complete
+  // Check for streaming classes
+  if (detection.streamingClasses && detection.streamingClasses.length > 0) {
+    for (const className of detection.streamingClasses) {
+      const indicators = document.querySelectorAll(`[class*="${className}"]`);
+      if (indicators.length > 0) {
+        console.log(`[RTool] Response incomplete: Found ${indicators.length} '${className}' indicators`);
+        return false;
+      }
+    }
+  }
+  
+  // Check for completion buttons (Gemini)
+  if (detection.completionButtons && detection.completionButtons.length > 0) {
+    const selector = detection.completionButtons.join(', ');
+    const completionButtons = document.querySelectorAll(selector);
+    if (completionButtons.length > 0) {
+      console.log(`[RTool] Response complete: Found ${completionButtons.length} completion buttons`);
+      return true;
+    }
   }
   
   // Default: assume incomplete (will rely on debounce)
@@ -415,8 +433,19 @@ function stopConversationMonitoring() {
   console.log('[RTool] Conversation monitoring stopped');
 }
 
-// Extract messages from the page (ChatGPT/Gemini/ChatKit format)
+// Extract messages from the page using site-specific configuration
 function extractConversationMessages() {
+  // Use config-driven extraction if available
+  if (currentSiteConfig) {
+    return extractConversationMessagesWithConfig(currentSiteConfig);
+  }
+  
+  // Fallback to legacy extraction
+  return extractConversationMessagesLegacy();
+}
+
+// Legacy extraction function (kept as fallback)
+function extractConversationMessagesLegacy() {
   const messages = [];
   
   // Try ChatGPT format (data-message-author-role attribute)
