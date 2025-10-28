@@ -236,9 +236,12 @@ exportCsvBtn.addEventListener('click', () => {
 // Clear logs
 clearLogsBtn.addEventListener('click', async () => {
   if (confirm(`Clear ${sessionLogs.length} log entries?`)) {
+    console.log(`[RTool] Clearing ${sessionLogs.length} log entries...`);
     sessionLogs = [];
     await chrome.storage.local.set({ sessionLogs: [] });
-    updateLoggingStatus('0 entries logged');
+    // Reload to ensure we're in sync
+    await loadLoggingConfig();
+    console.log(`[RTool] Logs cleared, now have ${sessionLogs.length} entries`);
   }
 });
 
@@ -648,10 +651,11 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       // No pending entry found - create new entry anyway so responses don't get lost
       console.log(`[RTool] No pending entry found for window ${windowIndex}, creating new entry`);
 
-      // Check if we already have this exact response (avoid duplicates)
+      // Check if we already have this exact response for this window (avoid duplicates)
       const existingResponse = sessionLogs.findIndex(
         log => log.windowIndex === windowIndex &&
-               log.response === response
+               log.response === response &&
+               log.response !== '(pending)' // Don't match pending entries
       );
 
       if (existingResponse !== -1) {
@@ -667,18 +671,22 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       const siteConfig = getSiteConfig(siteKey);
       const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
 
+      // Determine if this is a response to a manual prompt or a standalone response
+      const isManualResponse = !prompt && response;
+      const promptText = prompt || (isManualResponse ? 'Manual Interaction' : 'Unknown Prompt');
+
       sessionLogs.push({
         timestamp: timestamp || new Date().toISOString(),
         userId: userIdValue,
         url: siteUrl,
         windowIndex: windowIndex,
-        basePrompt: prompt || 'Manual Response', // Use prompt if available
+        basePrompt: promptText,
         transform: 'none:none',
-        prompt: prompt || 'Manual Response',
+        prompt: promptText,
         response: response,
         success: true
       });
-      console.log(`[RTool] Added response-only entry for window ${windowIndex}`);
+      console.log(`[RTool] Added ${isManualResponse ? 'manual response' : 'fallback'} entry for window ${windowIndex}`);
     }
     
     // Save to storage
