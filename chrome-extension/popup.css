@@ -60,7 +60,7 @@ body {
 }
 
 .section {
-  padding: 15px;
+  padding: 20px;
   border-bottom: 1px solid #333;
 }
 
@@ -152,6 +152,17 @@ button {
   font-size: 13px;
   margin-top: 10px;
   transition: background 0.2s;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.button-row button {
+  flex: 1;
+  margin-top: 0;
 }
 
 button.primary {
