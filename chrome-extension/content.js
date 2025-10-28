@@ -380,16 +380,22 @@ function isResponseComplete() {
 function logCompletedResponse(responseText) {
   // Prevent concurrent calls
   if (isLoggingResponse) {
-    console.log('[RTool] Already logging, skipping duplicate');
+    console.log('[RTool] Already logging response, skipping duplicate call');
     return;
   }
-  
-  // Prevent duplicate logging
+
+  // Prevent duplicate logging of the exact same response
   if (lastResponse === responseText) {
     console.log('[RTool] Already logged this exact response, skipping');
     return;
   }
-  
+
+  // Skip if we don't have a prompt to match against
+  if (!lastPrompt) {
+    console.log('[RTool] No lastPrompt set, cannot log response');
+    return;
+  }
+
   isLoggingResponse = true;
   lastResponse = responseText;
   pendingResponse = null;
@@ -398,27 +404,22 @@ function logCompletedResponse(responseText) {
   console.log('[RTool] lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
   
   // Send to background for logging
-  if (lastPrompt) {
-    chrome.runtime.sendMessage({
-      action: 'logConversation',
-      windowIndex: windowIndex,
-      prompt: lastPrompt,
-      response: lastResponse,
-      timestamp: new Date().toISOString()
-    }).then(() => {
-      console.log('[RTool] ✓ Response logged successfully');
-      // Reset flag after a delay to allow for next response
-      setTimeout(() => {
-        isLoggingResponse = false;
-      }, 1000);
-    }).catch(err => {
-      console.error('[RTool] ✗ Failed to log response:', err);
+  chrome.runtime.sendMessage({
+    action: 'logConversation',
+    windowIndex: windowIndex,
+    prompt: lastPrompt,
+    response: lastResponse,
+    timestamp: new Date().toISOString()
+  }).then(() => {
+    console.log('[RTool] ✓ Response logged successfully for prompt:', lastPrompt?.substring(0, 30));
+    // Reset flag after a delay to allow for next response
+    setTimeout(() => {
       isLoggingResponse = false;
-    });
-  } else {
-    console.warn('[RTool] ✗ Cannot log response: no lastPrompt detected');
+    }, 1000);
+  }).catch(err => {
+    console.error('[RTool] ✗ Failed to log response:', err);
     isLoggingResponse = false;
-  }
+  });
 }
 
 function stopConversationMonitoring() {

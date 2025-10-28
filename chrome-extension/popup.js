@@ -564,16 +564,16 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       sessionLogs[windowPendingIndex].response = response;
       console.log(`[RTool] Updated window ${windowIndex} log entry with response: ${response.substring(0, 50)}...`);
     } else {
-      // Check if there's already a completed entry for this window with this prompt
-      const existingEntryIndex = sessionLogs.findIndex(
+      // Check if we already have this exact prompt-response pair
+      const existingExactMatch = sessionLogs.findIndex(
         log => log.windowIndex === windowIndex &&
-               (log.prompt === prompt || log.basePrompt === prompt) &&
-               log.response !== '(pending)'
+               log.prompt === prompt &&
+               log.response === response
       );
 
-      if (existingEntryIndex !== -1) {
-        console.log(`[RTool] Found existing completed entry for window ${windowIndex}, skipping duplicate manual entry`);
-        return; // Don't create duplicate
+      if (existingExactMatch !== -1) {
+        console.log(`[RTool] Exact prompt-response match already exists for window ${windowIndex}, skipping duplicate`);
+        return;
       }
 
       // Add new entry (manual interaction)
