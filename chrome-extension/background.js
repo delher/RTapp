@@ -145,6 +145,31 @@ async function handleStartMonitoring() {
   }
 }
 
+// Wait for a tab to finish loading
+function waitForTabLoad(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.get(tabId, (tab) => {
+      if (tab.status === 'complete') {
+        resolve();
+      } else {
+        const listener = (updatedTabId, changeInfo) => {
+          if (updatedTabId === tabId && changeInfo.status === 'complete') {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }, 10000);
+      }
+    });
+  });
+}
+
 // Open multiple popup windows
 async function handleOpenWindows(count, url) {
   try {
@@ -184,14 +209,16 @@ async function handleOpenWindows(count, url) {
           focused: i === 0
         });
         
+        const tabId = window.tabs[0].id;
+        
         createdWindows.push({
           id: window.id,
-          tabId: window.tabs[0].id,
+          tabId: tabId,
           url: validUrl,
           index: i
         });
         
-        console.log(`[RTool BG] Created window ${i + 1}: ID ${window.id}, Tab ${window.tabs[0].id}`);
+        console.log(`[RTool BG] Created window ${i + 1}: ID ${window.id}, Tab ${tabId}`);
       } catch (windowError) {
         console.error(`[RTool BG] Failed to create window ${i + 1}:`, windowError);
         // Continue trying to create other windows
@@ -204,6 +231,25 @@ async function handleOpenWindows(count, url) {
     
     rtoolWindows = createdWindows;
     console.log('[RTool BG] rtoolWindows array set to:', rtoolWindows);
+    
+    // Wait for all tabs to finish loading and inject content script
+    console.log('[RTool BG] Waiting for tabs to load...');
+    for (const win of createdWindows) {
+      try {
+        // Wait for tab to finish loading
+        await waitForTabLoad(win.tabId);
+        
+        // Manually inject content script to ensure it's loaded
+        await chrome.scripting.executeScript({
+          target: { tabId: win.tabId },
+          files: ['content.js']
+        });
+        
+        console.log(`[RTool BG] Tab ${win.tabId} loaded and content script injected`);
+      } catch (error) {
+        console.warn(`[RTool BG] Failed to inject content script in tab ${win.tabId}:`, error);
+      }
+    }
     
     // Save to storage
     await chrome.storage.local.set({ rtoolWindows: createdWindows });
