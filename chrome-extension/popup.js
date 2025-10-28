@@ -13,6 +13,15 @@ const detachBtn = document.getElementById('detachBtn');
 let activeWindows = [];
 let windowTransforms = {};
 
+// Listen for conversation logs from content scripts
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'addToLog') {
+    console.log('[RTool Popup] Received log entry:', request);
+    addLogEntry(request.windowIndex, request.prompt, request.response, request.timestamp);
+    sendResponse({ success: true });
+  }
+});
+
 // Check if we're already in a detached/popup window
 // If so, hide the detach button since we're already floating
 chrome.windows.getCurrent((currentWindow) => {
@@ -126,13 +135,14 @@ exportCsvBtn.addEventListener('click', () => {
   }
   
   // Create CSV content
-  const headers = ['Timestamp', 'Window', 'Transform', 'Prompt', 'Status'];
+  const headers = ['Timestamp', 'Window', 'Transform', 'Prompt', 'Response', 'Source'];
   const rows = sessionLogs.map(log => [
     log.timestamp,
     `Window ${log.windowIndex + 1}`,
-    log.transform,
-    `"${log.prompt.replace(/"/g, '""')}"`, // Escape quotes
-    log.success ? 'Success' : 'Failed'
+    log.transform || 'none:none',
+    `"${(log.prompt || '').replace(/"/g, '""')}"`, // Escape quotes
+    `"${(log.response || '(pending)').replace(/"/g, '""')}"`, // Escape quotes
+    log.source || 'rtool'
   ]);
   
   const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
@@ -192,6 +202,16 @@ openBtn.addEventListener('click', async () => {
       initializeTransforms();
       sendBtn.disabled = false; // Enable send button
       console.log('[RTool Popup] Send button enabled');
+      
+      // Start monitoring for manual interactions
+      setTimeout(async () => {
+        try {
+          await chrome.runtime.sendMessage({ action: 'startMonitoring' });
+          console.log('[RTool Popup] Started conversation monitoring');
+        } catch (error) {
+          console.error('[RTool Popup] Failed to start monitoring:', error);
+        }
+      }, 2000); // Wait for pages to load
     } else {
       const errorMsg = response?.error || 'Unknown error';
       updateStatus(`Error: ${errorMsg}`, 'error');
@@ -300,14 +320,16 @@ async function logToCSV(prompt, results) {
 
     const timestamp = new Date().toISOString();
     
-    // Add each window's result to logs
+    // Add each window's result to logs (response will be added later when captured)
     for (const result of results) {
       sessionLogs.push({
         timestamp: timestamp,
         windowIndex: result.index,
         transform: result.transform || 'none:none',
         prompt: prompt,
-        success: result.success || false
+        response: '(pending)',
+        success: result.success || false,
+        source: 'rtool'
       });
     }
     
@@ -318,6 +340,47 @@ async function logToCSV(prompt, results) {
     console.log('[RTool] Logged to CSV buffer');
   } catch (error) {
     console.error('[RTool] Failed to log:', error);
+  }
+}
+
+// Add a log entry (from conversation monitoring or manual interaction)
+async function addLogEntry(windowIndex, prompt, response, timestamp) {
+  try {
+    const data = await chrome.storage.local.get('loggingEnabled');
+    if (!data.loggingEnabled) {
+      return;
+    }
+
+    // Check if there's a pending entry for this prompt
+    const pendingIndex = sessionLogs.findIndex(
+      log => log.windowIndex === windowIndex && 
+             log.prompt === prompt && 
+             log.response === '(pending)'
+    );
+
+    if (pendingIndex !== -1) {
+      // Update existing entry with response
+      sessionLogs[pendingIndex].response = response;
+      console.log('[RTool] Updated log entry with response');
+    } else {
+      // Add new entry (manual interaction)
+      sessionLogs.push({
+        timestamp: timestamp || new Date().toISOString(),
+        windowIndex: windowIndex,
+        transform: 'none:none', // Manual entries have no transform
+        prompt: prompt,
+        response: response,
+        success: true,
+        source: 'manual'
+      });
+      console.log('[RTool] Added manual interaction to log');
+    }
+    
+    // Save to storage
+    await chrome.storage.local.set({ sessionLogs: sessionLogs });
+    updateLoggingStatus(`${sessionLogs.length} entries logged`, 'success');
+  } catch (error) {
+    console.error('[RTool] Failed to add log entry:', error);
   }
 }
 

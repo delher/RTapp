@@ -86,6 +86,21 @@ async function initializeWindows() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Background received message:', request.action);
   
+  // Handle conversation logging from content scripts
+  if (request.action === 'logConversation') {
+    console.log('[RTool BG] Received conversation log:', request);
+    // Forward to popup for CSV logging
+    chrome.runtime.sendMessage({
+      action: 'addToLog',
+      windowIndex: request.windowIndex,
+      prompt: request.prompt,
+      response: request.response,
+      timestamp: request.timestamp
+    }).catch(err => console.log('[RTool BG] Popup not open, log not forwarded'));
+    sendResponse({ success: true });
+    return true;
+  }
+  
   // Initialize windows from storage before processing any request
   initializeWindows().then(() => {
     if (request.action === 'openWindows') {
@@ -101,10 +116,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     else if (request.action === 'sendPrompt') {
       handleSendPrompt(request.prompt, request.transforms).then(sendResponse);
     }
+    else if (request.action === 'startMonitoring') {
+      handleStartMonitoring().then(sendResponse);
+    }
   });
   
   return true; // Will respond asynchronously
 });
+
+// Start monitoring all open windows
+async function handleStartMonitoring() {
+  try {
+    console.log('[RTool BG] Starting monitoring on all windows');
+    for (const win of rtoolWindows) {
+      try {
+        await chrome.tabs.sendMessage(win.tabId, {
+          action: 'startMonitoring',
+          windowIndex: win.index
+        });
+      } catch (error) {
+        console.error(`[RTool BG] Failed to start monitoring on window ${win.index}:`, error);
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    console.error('[RTool BG] Error starting monitoring:', error);
+    return { success: false, error: error.message };
+  }
+}
 
 // Open multiple popup windows
 async function handleOpenWindows(count, url) {
@@ -227,7 +266,8 @@ async function handleSendPrompt(prompt, transforms) {
         const response = await chrome.tabs.sendMessage(win.tabId, {
           action: 'injectPrompt',
           prompt: prompt,
-          transform: transform
+          transform: transform,
+          windowIndex: win.index
         });
         
         results.push({

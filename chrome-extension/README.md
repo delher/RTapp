@@ -1,14 +1,15 @@
 # RTool Chrome Extension
 
-Multi-window web automation tool with Parseltongue transforms and Google Sheets logging.
+Multi-window web automation tool with Parseltongue transforms and comprehensive CSV logging.
 
 ## Features
 
 - 🪟 **Multi-Window Management**: Open 1-4 browser windows simultaneously
 - ✨ **Parseltongue Transforms**: Apply various text transformations per window (Base64, ROT13, Zalgo, etc.)
-- 📊 **Google Sheets Logging**: Automatically log prompts and responses to your spreadsheet
+- 📊 **CSV Logging with Response Capture**: Automatically log prompts, responses, and manual interactions
 - 🎯 **Targeted Injection**: Send prompts to specific input fields on any website
 - 🔧 **Persistent Control Panel**: Resizable floating control panel that stays open
+- 👁️ **Conversation Monitoring**: Capture all manual interactions in each window
 
 ## Quick Start
 
@@ -31,39 +32,43 @@ Multi-window web automation tool with Parseltongue transforms and Google Sheets 
 6. **Enter Prompt** - Type your prompt
 7. **Click "Send to All Windows"** - Prompt is sent to all windows with their respective transforms
 
-### Google Sheets Logging (Optional)
+### CSV Logging (Optional)
 
-Super simple webhook-based logging - no OAuth or API keys needed!
+Comprehensive logging of all interactions with automatic response capture!
 
-**For Users:**
-1. Get the webhook URL from your sheet administrator
-2. Open RTool → Expand "📊 Logging Setup"
-3. Paste the webhook URL
-4. Click "Save Settings" and "Test Connection"
-5. Enable logging checkbox
+**Features:**
+- ✅ Logs RTool-sent prompts with their transforms
+- ✅ Captures LLM responses automatically
+- ✅ Monitors manual interactions (prompts you type directly)
+- ✅ Exports to CSV with full conversation history
+- ✅ No external services required
 
-**For Administrators:**
-1. Follow the detailed setup guide: [WEBHOOK-SETUP.md](./WEBHOOK-SETUP.md)
-2. Add a simple Apps Script to your Google Sheet (copy-paste provided code)
-3. Deploy as web app
-4. Share the webhook URL with your users
+**How to Use:**
+1. Open RTool → Expand "📊 CSV Logging"
+2. Check "Enable logging"
+3. Use RTool normally - all interactions are logged
+4. Click "Export CSV" to download your log file
+5. Click "Clear Logs" to start fresh
 
-**Quick Summary:**
-- ✅ No Google Cloud project needed
-- ✅ No OAuth authentication required
-- ✅ Just paste a URL and go
-- ✅ Perfect for teams using a shared sheet
+**CSV Format:**
+- **Timestamp**: When the prompt was sent
+- **Window**: Which window (1-4)
+- **Transform**: Applied transform (e.g., "encoding:base64")
+- **Prompt**: The prompt text (original or transformed)
+- **Response**: The LLM's response
+- **Source**: "rtool" (sent via RTool) or "manual" (typed directly)
 
 ## Files
 
 - `manifest.json` - Extension configuration and permissions
 - `popup.html` - Control panel UI
 - `popup.css` - Control panel styling
-- `popup.js` - Control panel logic and event handlers
-- `background.js` - Service worker for window management
-- `content.js` - Injected script for prompt injection
-- `sheets-logger.js` - Google Sheets webhook integration
-- `WEBHOOK-SETUP.md` - Detailed webhook setup guide for logging
+- `popup.js` - Control panel logic, event handlers, and CSV logging
+- `background.js` - Service worker for window management and message routing
+- `content.js` - Injected script for prompt injection, transforms, and conversation monitoring
+- `README.md` - This file
+- `USER-QUICK-START.md` - Simplified guide for end users
+- `CHROMEOS-INSTALL.md` - ChromeOS-specific installation instructions
 
 ## Parseltongue Transforms
 

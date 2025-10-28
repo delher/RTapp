@@ -1,14 +1,31 @@
 // Content script that runs in each opened window
-// Handles prompt injection and transformation
+// Handles prompt injection, transformation, and conversation monitoring
 
 console.log('[RTool] Content script loaded');
+
+// State for conversation monitoring
+let conversationObserver = null;
+let lastPrompt = null;
+let lastResponse = null;
+let windowIndex = null;
+let isMonitoring = false;
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'injectPrompt') {
     console.log('[RTool] Received inject prompt request');
+    windowIndex = request.windowIndex;
     injectPrompt(request.prompt, request.transform).then(sendResponse);
     return true; // Will respond asynchronously
+  } else if (request.action === 'startMonitoring') {
+    console.log('[RTool] Starting conversation monitoring');
+    windowIndex = request.windowIndex;
+    startConversationMonitoring();
+    sendResponse({ success: true });
+  } else if (request.action === 'stopMonitoring') {
+    console.log('[RTool] Stopping conversation monitoring');
+    stopConversationMonitoring();
+    sendResponse({ success: true });
   }
 });
 
@@ -203,5 +220,91 @@ function applyTransform(text, transform) {
   }
   
   return text;
+}
+
+// Start monitoring conversation for manual interactions
+function startConversationMonitoring() {
+  if (isMonitoring) return;
+  isMonitoring = true;
+  
+  // Watch for new messages in the conversation
+  const targetNode = document.body;
+  const config = { childList: true, subtree: true };
+  
+  conversationObserver = new MutationObserver((mutations) => {
+    // Look for new conversation items
+    const messages = extractConversationMessages();
+    if (messages.length > 0) {
+      const latest = messages[messages.length - 1];
+      
+      // Check if it's a new prompt or response
+      if (latest.role === 'user' && latest.content !== lastPrompt) {
+        lastPrompt = latest.content;
+        console.log('[RTool] Detected manual prompt:', lastPrompt);
+      } else if (latest.role === 'assistant' && latest.content !== lastResponse) {
+        lastResponse = latest.content;
+        console.log('[RTool] Detected response:', lastResponse.substring(0, 100) + '...');
+        
+        // Send to background for logging
+        if (lastPrompt) {
+          chrome.runtime.sendMessage({
+            action: 'logConversation',
+            windowIndex: windowIndex,
+            prompt: lastPrompt,
+            response: lastResponse,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+    }
+  });
+  
+  conversationObserver.observe(targetNode, config);
+  console.log('[RTool] Conversation monitoring started');
+}
+
+function stopConversationMonitoring() {
+  if (conversationObserver) {
+    conversationObserver.disconnect();
+    conversationObserver = null;
+  }
+  isMonitoring = false;
+  console.log('[RTool] Conversation monitoring stopped');
+}
+
+// Extract messages from the page (ChatGPT/ChatKit format)
+function extractConversationMessages() {
+  const messages = [];
+  
+  // Try ChatGPT format
+  const chatGptMessages = document.querySelectorAll('[data-message-author-role]');
+  chatGptMessages.forEach(msg => {
+    const role = msg.getAttribute('data-message-author-role');
+    const content = msg.querySelector('.markdown')?.innerText || 
+                   msg.querySelector('[class*="text"]')?.innerText ||
+                   msg.innerText;
+    if (content && content.trim()) {
+      messages.push({ role, content: content.trim() });
+    }
+  });
+  
+  // Try generic format (look for user/assistant patterns)
+  if (messages.length === 0) {
+    const allMessages = document.querySelectorAll('[class*="message"], [class*="chat"]');
+    allMessages.forEach(msg => {
+      const text = msg.innerText.trim();
+      if (text.length > 10) { // Avoid empty/short elements
+        // Heuristic: detect role based on styling or position
+        const isUser = msg.querySelector('[class*="user"]') || 
+                      msg.classList.contains('user');
+        messages.push({ 
+          role: isUser ? 'user' : 'assistant', 
+          content: text 
+        });
+      }
+    });
+  }
+  
+  return messages;
 }
 
