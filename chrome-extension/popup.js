@@ -550,26 +550,40 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       return;
     }
 
-    // Try to find a pending entry for this window with matching prompt or basePrompt
+    // Try to find a pending entry for this window with matching prompt
+    // For manual entries, match against basePrompt (original untransformed prompt)
+    // For AI responses, match against the prompt that was actually sent
     const windowPendingIndex = sessionLogs.findIndex(
-      log => log.windowIndex === windowIndex && 
-             (log.prompt === prompt || log.basePrompt === prompt) && 
-             log.response === '(pending)'
+      log => log.windowIndex === windowIndex &&
+             log.response === '(pending)' &&
+             (log.basePrompt === prompt || log.prompt === prompt)
     );
 
     if (windowPendingIndex !== -1) {
       // Update existing window entry with response
       sessionLogs[windowPendingIndex].response = response;
-      console.log(`[RTool] Updated window ${windowIndex} log entry with response`);
+      console.log(`[RTool] Updated window ${windowIndex} log entry with response: ${response.substring(0, 50)}...`);
     } else {
+      // Check if there's already a completed entry for this window with this prompt
+      const existingEntryIndex = sessionLogs.findIndex(
+        log => log.windowIndex === windowIndex &&
+               (log.prompt === prompt || log.basePrompt === prompt) &&
+               log.response !== '(pending)'
+      );
+
+      if (existingEntryIndex !== -1) {
+        console.log(`[RTool] Found existing completed entry for window ${windowIndex}, skipping duplicate manual entry`);
+        return; // Don't create duplicate
+      }
+
       // Add new entry (manual interaction)
       const userIdValue = userId.value.trim() || '(unknown)';
-      
+
       // Get current site URL
       const siteKey = siteSelect.value;
       const siteConfig = getSiteConfig(siteKey);
       const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
-      
+
       sessionLogs.push({
         timestamp: timestamp || new Date().toISOString(),
         userId: userIdValue,
@@ -581,7 +595,7 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         response: response,
         success: true
       });
-      console.log('[RTool] Added manual interaction to log');
+      console.log(`[RTool] Added manual interaction to log for window ${windowIndex}: ${prompt.substring(0, 50)}...`);
     }
     
     // Save to storage
