@@ -177,7 +177,7 @@ exportCsvBtn.addEventListener('click', () => {
   }
   
   // Create CSV content
-  const headers = ['Timestamp', 'User ID', 'Window', 'Base Prompt', 'Transform', 'Prompt', 'Response', 'Source'];
+  const headers = ['Timestamp', 'User ID', 'URL', 'Window', 'Base Prompt', 'Transform', 'Prompt', 'Response'];
   const rows = sessionLogs.map(log => {
     // Format window name
     let windowName;
@@ -188,16 +188,16 @@ exportCsvBtn.addEventListener('click', () => {
     } else {
       windowName = log.windowIndex;
     }
-    
+
     return [
       log.timestamp,
       log.userId || '',
+      log.url || '',
       windowName,
       `"${(log.basePrompt || '').replace(/"/g, '""')}"`, // Base prompt (untransformed)
       log.transform || 'none:none',
       `"${(log.prompt || '').replace(/"/g, '""')}"`, // Transformed prompt
-      `"${(log.response || '(pending)').replace(/"/g, '""')}"`,
-      log.source || 'rtool'
+      `"${(log.response || '(pending)').replace(/"/g, '""')}"` // Response
     ];
   });
   
