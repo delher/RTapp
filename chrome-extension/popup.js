@@ -554,9 +554,9 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         timestamp: timestamp || new Date().toISOString(),
         userId: userIdValue,
         windowIndex: windowIndex,
-        basePrompt: prompt, // Manual entries: base = prompt
+        basePrompt: '', // Manual entries have no base prompt (blank)
         transform: 'none:none', // Manual entries have no transform
-        prompt: prompt, // Manual entries: prompt = base
+        prompt: prompt, // Manual entries: just the prompt they typed
         response: response,
         success: true,
         source: 'manual'
