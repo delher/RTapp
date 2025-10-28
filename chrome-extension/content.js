@@ -250,11 +250,12 @@ function startConversationMonitoring() {
     
     const latest = messages[messages.length - 1];
     console.log('[RTool] MutationObserver found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
+    console.log('[RTool] Latest content preview:', latest.content.substring(0, 80));
     
     // Check if it's a new prompt or response
     if (latest.role === 'user' && latest.content !== lastPrompt) {
       lastPrompt = latest.content;
-      console.log('[RTool] Detected manual prompt:', lastPrompt.substring(0, 100));
+      console.log('[RTool] ✓ Detected NEW manual prompt:', lastPrompt.substring(0, 100));
       // Reset response state for new prompt
       lastResponse = null;
       pendingResponse = null;
@@ -266,13 +267,17 @@ function startConversationMonitoring() {
     } else if (latest.role === 'assistant') {
       // Skip if we're already logging this response
       if (isLoggingResponse) {
+        console.log('[RTool] Skipping: already logging');
         return;
       }
       
       // Skip if content hasn't changed
       if (latest.content === lastResponse || latest.content === pendingResponse) {
+        console.log('[RTool] Skipping: content unchanged');
         return;
       }
+      
+      console.log('[RTool] ✓ Detected assistant response update');
       
       // Response is updating (streaming)
       pendingResponse = latest.content;
@@ -359,6 +364,7 @@ function logCompletedResponse(responseText) {
   pendingResponse = null;
   
   console.log('[RTool] Logging response (length:', responseText.length, '):', responseText.substring(0, 100) + '...');
+  console.log('[RTool] lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
   
   // Send to background for logging
   if (lastPrompt) {
@@ -369,16 +375,17 @@ function logCompletedResponse(responseText) {
       response: lastResponse,
       timestamp: new Date().toISOString()
     }).then(() => {
-      console.log('[RTool] Response logged successfully');
+      console.log('[RTool] ✓ Response logged successfully');
       // Reset flag after a delay to allow for next response
       setTimeout(() => {
         isLoggingResponse = false;
       }, 1000);
     }).catch(err => {
-      console.error('[RTool] Failed to log response:', err);
+      console.error('[RTool] ✗ Failed to log response:', err);
       isLoggingResponse = false;
     });
   } else {
+    console.warn('[RTool] ✗ Cannot log response: no lastPrompt detected');
     isLoggingResponse = false;
   }
 }
@@ -426,19 +433,30 @@ function extractConversationMessages() {
       const text = msg.innerText?.trim();
       if (!text || text.length < 5) return;
       
-      // Skip Gemini "thinking" sections (collapsible reasoning blocks)
+      // Skip Gemini "thinking" sections (collapsible reasoning blocks and headers)
       const ariaLabel = msg.getAttribute('aria-label')?.toLowerCase() || '';
       const msgClass = msg.className?.toLowerCase() || '';
       const parentClass = parent?.className?.toLowerCase() || '';
       const combined = parentClass + ' ' + msgClass + ' ' + ariaLabel;
       
-      if (combined.includes('thinking') || 
+      // Also check text content for thinking indicators
+      const textLower = text.toLowerCase();
+      const thinkingKeywords = [
+        'thinking', 'reasoning', 'analyzing', 'interpreting', 'pinpointing',
+        'considering', 'evaluating', 'examining', 'assessing', 'sources'
+      ];
+      
+      // Skip if it's a thinking section or a short header that matches thinking patterns
+      const isThinkingHeader = text.length < 100 && thinkingKeywords.some(keyword => textLower.includes(keyword));
+      const isThinkingSection = combined.includes('thinking') || 
           combined.includes('reasoning') || 
           combined.includes('analyzing') ||
           ariaLabel.includes('show thinking') ||
           msg.closest('[aria-label*="thinking"]') ||
-          msg.closest('[class*="thinking"]')) {
-        console.log('[RTool] Skipping Gemini thinking section');
+          msg.closest('[class*="thinking"]');
+      
+      if (isThinkingSection || isThinkingHeader) {
+        console.log('[RTool] Skipping Gemini thinking section/header:', text.substring(0, 50));
         return;
       }
       
@@ -479,15 +497,24 @@ function extractConversationMessages() {
       
       if (!text || text.length < 5) return;
       
-      // Skip Gemini "thinking" sections
-      if (classList.includes('thinking') || 
+      // Skip Gemini "thinking" sections and headers
+      const textLower = text.toLowerCase();
+      const thinkingKeywords = [
+        'thinking', 'reasoning', 'analyzing', 'interpreting', 'pinpointing',
+        'considering', 'evaluating', 'examining', 'assessing', 'sources'
+      ];
+      
+      const isThinkingHeader = text.length < 100 && thinkingKeywords.some(keyword => textLower.includes(keyword));
+      const isThinkingSection = classList.includes('thinking') || 
           classList.includes('reasoning') || 
           classList.includes('analyzing') ||
           ariaLabel.includes('thinking') ||
           ariaLabel.includes('show thinking') ||
           msg.closest('[aria-label*="thinking"]') ||
-          msg.closest('[class*="thinking"]')) {
-        console.log('[RTool] Skipping Gemini thinking section (Strategy 2)');
+          msg.closest('[class*="thinking"]');
+      
+      if (isThinkingSection || isThinkingHeader) {
+        console.log('[RTool] Skipping Gemini thinking section/header (Strategy 2):', text.substring(0, 50));
         return;
       }
       
