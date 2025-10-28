@@ -114,21 +114,22 @@ function detectRole(element, roleIndicators) {
   if (!roleIndicators) return null;
   
   const classList = element.className?.toLowerCase() || '';
+  const parentClass = element.parentElement?.className?.toLowerCase() || '';
   const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
   const dataTestId = element.getAttribute('data-test-id')?.toLowerCase() || '';
-  const combined = `${classList} ${ariaLabel} ${dataTestId}`;
+  const combined = `${classList} ${parentClass} ${ariaLabel} ${dataTestId}`;
   
   // Check user indicators
   if (roleIndicators.user) {
     for (const indicator of roleIndicators.user) {
-      if (combined.includes(indicator)) return 'user';
+      if (combined.includes(indicator.toLowerCase())) return 'user';
     }
   }
   
   // Check assistant indicators
   if (roleIndicators.assistant) {
     for (const indicator of roleIndicators.assistant) {
-      if (combined.includes(indicator)) return 'assistant';
+      if (combined.includes(indicator.toLowerCase())) return 'assistant';
     }
   }
   
@@ -155,6 +156,12 @@ function extractContent(element, selectors) {
 function shouldSkipMessage(element, content, filtering) {
   if (!filtering) return false;
   
+  // Check minimum response length (hard filter for very short responses)
+  if (filtering.minResponseLength && content.length < filtering.minResponseLength) {
+    console.log(`[RTool] Skipping message too short (${content.length} < ${filtering.minResponseLength}): ${content.substring(0, 50)}`);
+    return true;
+  }
+  
   // Check minimum content length for short messages
   if (filtering.minContentLength && content.length < filtering.minContentLength) {
     // For short messages, be extra aggressive with filtering
@@ -163,7 +170,8 @@ function shouldSkipMessage(element, content, filtering) {
     // Skip if it contains ANY thinking-related keyword
     const thinkingKeywords = [
       'thinking', 'reasoning', 'analyzing', 'interpreting', 'sources',
-      'intent', 'noise', 'pattern', 'cipher', 'studies'
+      'intent', 'noise', 'pattern', 'cipher', 'studies',
+      'constructing', 'discovering', 'gathering', 'finalizing', 'draft', 'details', 'intel', 'knowledge'
     ];
     
     for (const keyword of thinkingKeywords) {
@@ -207,7 +215,7 @@ function shouldSkipMessage(element, content, filtering) {
       const textLower = content.toLowerCase();
       const maxLength = pattern.maxLength || 999999;
       
-      if (content.length <= maxLength) {  // Changed < to <= for inclusive check
+      if (content.length <= maxLength) {
         for (const keyword of pattern.keywords) {
           const keywordLower = keyword.toLowerCase();
           if (textLower.includes(keywordLower)) {
@@ -222,10 +230,14 @@ function shouldSkipMessage(element, content, filtering) {
   // Check skip selectors (for parent and ancestor elements)
   if (filtering.skipSelectors) {
     for (const selector of filtering.skipSelectors) {
-      // Check element itself and all parents
-      if (element.matches(selector) || element.closest(selector)) {
-        console.log(`[RTool] Skipping message (selector filter '${selector}'): ${content.substring(0, 50)}`);
-        return true;
+      try {
+        // Check element itself and all parents
+        if (element.matches(selector) || element.closest(selector)) {
+          console.log(`[RTool] Skipping message (selector filter '${selector}'): ${content.substring(0, 50)}`);
+          return true;
+        }
+      } catch (e) {
+        // Ignore selector errors
       }
     }
   }
@@ -237,26 +249,43 @@ function shouldSkipMessage(element, content, filtering) {
 function extractConversationMessagesFallback() {
   const messages = [];
   
-  // Try common patterns
+  // Try common patterns with proper role detection
   const commonSelectors = [
-    '[data-message-author-role]',
-    '[class*="message"]',
-    '[class*="chat"]',
-    '[data-testid*="message"]'
+    { selector: '[data-message-author-role]', roleAttr: 'data-message-author-role' },
+    { selector: '[class*="message"]', roleAttr: null },
+    { selector: '[class*="chat"]', roleAttr: null },
+    { selector: '[data-testid*="message"]', roleAttr: null }
   ];
   
-  for (const selector of commonSelectors) {
-    const elements = document.querySelectorAll(selector);
+  for (const config of commonSelectors) {
+    const elements = document.querySelectorAll(config.selector);
     if (elements.length > 0) {
-      console.log(`[RTool] Fallback found ${elements.length} messages with selector: ${selector}`);
+      console.log(`[RTool] Fallback found ${elements.length} messages with selector: ${config.selector}`);
       elements.forEach(el => {
         const content = el.innerText?.trim();
-        if (content && content.length > 5) {
-          messages.push({ role: 'assistant', content });
+        if (!content || content.length < 10) return;
+        
+        // Determine role
+        let role = 'assistant'; // Default
+        if (config.roleAttr) {
+          role = el.getAttribute(config.roleAttr) || 'assistant';
+        } else {
+          // Try to detect from class names
+          const classList = el.className?.toLowerCase() || '';
+          const dataAttrs = (el.getAttribute('data-test-id') || '').toLowerCase();
+          if (classList.includes('user') || dataAttrs.includes('user')) {
+            role = 'user';
+          } else if (classList.includes('assistant') || classList.includes('model') || classList.includes('bot') ||
+                     dataAttrs.includes('assistant') || dataAttrs.includes('model')) {
+            role = 'assistant';
+          }
         }
+        
+        messages.push({ role, content });
       });
       
       if (messages.length > 0) {
+        console.log(`[RTool] Fallback extracted ${messages.length} messages`);
         return messages;
       }
     }
@@ -265,4 +294,3 @@ function extractConversationMessagesFallback() {
   console.warn('[RTool] Fallback extraction found no messages');
   return messages;
 }
-

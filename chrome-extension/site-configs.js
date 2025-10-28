@@ -53,13 +53,16 @@ const SITE_CONFIGS = {
       ]
     },
     filtering: {
-      // Filter out Gemini's thinking sections
+      // Minimum response length to log (filters out streaming status messages)
+      minResponseLength: 100,  // Responses must be at least 100 chars
+      
+      // Filter out Gemini's thinking sections and streaming status messages
       skipPatterns: [
         { type: 'class', values: ['thinking', 'reasoning', 'expandable', 'collapsible'] },
         { type: 'aria-label', values: ['thinking', 'show thinking', 'reasoning'] },
         { 
           type: 'content',
-          maxLength: 150,  // Increased from 100 to catch longer headers
+          maxLength: 150,  // Filter short messages that match these patterns
           keywords: [
             // Core thinking keywords
             'thinking', 'reasoning', 'analyzing', 'interpreting', 
@@ -76,7 +79,13 @@ const SITE_CONFIGS = {
             // Common Gemini thinking prefixes
             'analyzing ', 'interpreting ', 'considering ',
             'examining ', 'evaluating ', 'pinpointing ',
-            'exploring ', 'investigating '
+            'exploring ', 'investigating ',
+            
+            // Streaming status messages (these appear during response generation)
+            'constructing', 'discovering', 'gathering', 'finalizing',
+            'preparing', 'compiling', 'assembling', 'building',
+            'draft', 'details', 'intel', 'knowledge', 'information',
+            'just a sec', 'one moment', 'please wait'
           ]
         }
       ],
