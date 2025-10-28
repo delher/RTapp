@@ -329,7 +329,34 @@ async function handleSendPrompt(prompt, transforms) {
         const transform = transforms[win.index] || { category: 'none', method: 'none' };
         console.log(`[RTool BG] Window ${win.index}: Looking up transforms[${win.index}] = `, transform);
         
-        // Send message to content script in this tab
+        // First verify content script is still responsive
+        console.log(`[RTool BG] Testing connection to tab ${win.tabId}...`);
+        try {
+          const pingResponse = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+          console.log(`[RTool BG] Tab ${win.tabId} responded to ping:`, pingResponse);
+        } catch (pingError) {
+          console.error(`[RTool BG] Tab ${win.tabId} not responding to ping, attempting re-injection:`, pingError);
+          
+          // Try to re-inject content script
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: win.tabId },
+              files: ['content.js']
+            });
+            console.log(`[RTool BG] Re-injected content script into tab ${win.tabId}`);
+            
+            // Wait and test again
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const retestPing = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+            console.log(`[RTool BG] Tab ${win.tabId} now responding after re-injection:`, retestPing);
+          } catch (reinjectError) {
+            console.error(`[RTool BG] Failed to re-inject content script:`, reinjectError);
+            throw new Error('Content script not available and re-injection failed');
+          }
+        }
+        
+        // Now send the actual prompt
+        console.log(`[RTool BG] Sending prompt to tab ${win.tabId}...`);
         const response = await chrome.tabs.sendMessage(win.tabId, {
           action: 'injectPrompt',
           prompt: prompt,
