@@ -426,10 +426,21 @@ function extractConversationMessages() {
       const text = msg.innerText?.trim();
       if (!text || text.length < 5) return;
       
-      // Check parent or element for role indicators
-      const parentClass = parent?.className?.toLowerCase() || '';
+      // Skip Gemini "thinking" sections (collapsible reasoning blocks)
+      const ariaLabel = msg.getAttribute('aria-label')?.toLowerCase() || '';
       const msgClass = msg.className?.toLowerCase() || '';
-      const combined = parentClass + ' ' + msgClass;
+      const parentClass = parent?.className?.toLowerCase() || '';
+      const combined = parentClass + ' ' + msgClass + ' ' + ariaLabel;
+      
+      if (combined.includes('thinking') || 
+          combined.includes('reasoning') || 
+          combined.includes('analyzing') ||
+          ariaLabel.includes('show thinking') ||
+          msg.closest('[aria-label*="thinking"]') ||
+          msg.closest('[class*="thinking"]')) {
+        console.log('[RTool] Skipping Gemini thinking section');
+        return;
+      }
       
       let role = 'assistant'; // Default to assistant
       if (combined.includes('user') || combined.includes('query')) {
@@ -467,6 +478,18 @@ function extractConversationMessages() {
       const text = msg.innerText?.trim();
       
       if (!text || text.length < 5) return;
+      
+      // Skip Gemini "thinking" sections
+      if (classList.includes('thinking') || 
+          classList.includes('reasoning') || 
+          classList.includes('analyzing') ||
+          ariaLabel.includes('thinking') ||
+          ariaLabel.includes('show thinking') ||
+          msg.closest('[aria-label*="thinking"]') ||
+          msg.closest('[class*="thinking"]')) {
+        console.log('[RTool] Skipping Gemini thinking section (Strategy 2)');
+        return;
+      }
       
       // Detect role from multiple signals
       let role = null;
