@@ -18,10 +18,19 @@ let lastPrompt = '';
 
 // Listen for conversation logs from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[RTool Popup] Received message:', request.action, 'from', sender);
+
   if (request.action === 'addToLog') {
-    console.log('[RTool Popup] Received log entry:', request);
+    console.log('[RTool Popup] Processing addToLog:', {
+      windowIndex: request.windowIndex,
+      prompt: request.prompt ? request.prompt.substring(0, 30) : 'NULL',
+      responseLength: request.response?.length,
+      timestamp: request.timestamp
+    });
     addLogEntry(request.windowIndex, request.prompt, request.response, request.timestamp);
     sendResponse({ success: true });
+  } else {
+    sendResponse({ success: false, error: 'Unknown action' });
   }
 });
 
@@ -551,6 +560,13 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
     }
 
     console.log(`[RTool] addLogEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}, response length=${response?.length}`);
+    console.log(`[RTool] Current sessionLogs length: ${sessionLogs.length}`);
+    console.log(`[RTool] Current sessionLogs:`, sessionLogs.map(log => ({
+      window: log.windowIndex,
+      prompt: log.prompt?.substring(0, 20),
+      response: log.response?.substring(0, 20),
+      pending: log.response === '(pending)'
+    })));
 
     // Try to find a pending entry for this window
     let windowPendingIndex = -1;
@@ -565,10 +581,13 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       console.log(`[RTool] Searched for pending entry with prompt, found index: ${windowPendingIndex}`);
     } else {
       // If no prompt provided (RTOOL response), find any pending entry for this window
+      const pendingEntries = sessionLogs.filter(log => log.response === '(pending)');
+      console.log(`[RTool] Found ${pendingEntries.length} total pending entries:`, pendingEntries.map(log => `window ${log.windowIndex}`));
+
       windowPendingIndex = sessionLogs.findIndex(
         log => log.windowIndex === windowIndex && log.response === '(pending)'
       );
-      console.log(`[RTool] Searched for any pending entry (no prompt), found index: ${windowPendingIndex}`);
+      console.log(`[RTool] Searched for pending entry in window ${windowIndex}, found index: ${windowPendingIndex}`);
     }
 
     if (windowPendingIndex !== -1) {
