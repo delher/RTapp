@@ -152,21 +152,27 @@ let sessionLogs = [];
 // Load logging configuration
 async function loadLoggingConfig() {
   const data = await chrome.storage.local.get(['loggingEnabled', 'sessionLogs']);
-  enableLogging.checked = data.loggingEnabled || false;
+  // Default to enabled if not explicitly set
+  enableLogging.checked = data.loggingEnabled !== undefined ? data.loggingEnabled : true;
   sessionLogs = data.sessionLogs || [];
-  updateLoggingStatus(`${sessionLogs.length} entries logged`, 'normal');
+  updateLoggingStatus(`${sessionLogs.length} entries logged`);
+  
+  // Save default enabled state if first time
+  if (data.loggingEnabled === undefined) {
+    await chrome.storage.local.set({ loggingEnabled: true });
+  }
 }
 
 // Save logging toggle
 enableLogging.addEventListener('change', async () => {
   await chrome.storage.local.set({ loggingEnabled: enableLogging.checked });
-  updateLoggingStatus(enableLogging.checked ? 'Logging enabled' : 'Logging disabled', 'success');
+  updateLoggingStatus(`${sessionLogs.length} entries logged`);
 });
 
 // Export CSV
 exportCsvBtn.addEventListener('click', () => {
   if (sessionLogs.length === 0) {
-    updateLoggingStatus('No logs to export', 'error');
+    updateLoggingStatus('No logs to export');
     return;
   }
   
@@ -206,7 +212,7 @@ exportCsvBtn.addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
   
-  updateLoggingStatus(`Exported ${sessionLogs.length} entries`, 'success');
+  updateLoggingStatus(`${sessionLogs.length} entries logged`);
 });
 
 // Clear logs
@@ -214,14 +220,13 @@ clearLogsBtn.addEventListener('click', async () => {
   if (confirm(`Clear ${sessionLogs.length} log entries?`)) {
     sessionLogs = [];
     await chrome.storage.local.set({ sessionLogs: [] });
-    updateLoggingStatus('Logs cleared', 'success');
+    updateLoggingStatus('0 entries logged');
   }
 });
 
 // Update logging status message
-function updateLoggingStatus(message, type = 'normal') {
+function updateLoggingStatus(message) {
   loggingStatus.textContent = message;
-  loggingStatus.className = 'logging-status ' + type;
 }
 
 // Open windows
@@ -520,7 +525,7 @@ async function logToCSV(prompt, results) {
     
     // Save to storage
     await chrome.storage.local.set({ sessionLogs: sessionLogs });
-    updateLoggingStatus(`${sessionLogs.length} entries logged`, 'success');
+    updateLoggingStatus(`${sessionLogs.length} entries logged`);
     
     console.log('[RTool] Logged to CSV buffer');
   } catch (error) {
@@ -566,7 +571,7 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
     
     // Save to storage
     await chrome.storage.local.set({ sessionLogs: sessionLogs });
-    updateLoggingStatus(`${sessionLogs.length} entries logged`, 'success');
+    updateLoggingStatus(`${sessionLogs.length} entries logged`);
   } catch (error) {
     console.error('[RTool] Failed to add log entry:', error);
   }

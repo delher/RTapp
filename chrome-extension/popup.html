@@ -54,26 +54,18 @@
   </div>
 
   <div class="section">
-    <details id="loggingSection">
-      <summary>📊 CSV Logging</summary>
-      <div class="logging-config">
-        <div class="setup-info">
-          <p>Log all prompts and transforms to exportable CSV</p>
-        </div>
-        
-        <label class="checkbox-label">
-          <input type="checkbox" id="enableLogging" />
-          <span>Enable logging</span>
-        </label>
-        
-        <div class="logging-status" id="loggingStatus">0 entries logged</div>
-        
-        <div class="button-group">
-          <button id="exportCsvBtn" class="primary">📥 Export CSV</button>
-          <button id="clearLogsBtn" class="secondary">🗑 Clear Logs</button>
-        </div>
-      </div>
-    </details>
+    <div class="logging-header">
+      <label class="checkbox-label">
+        <input type="checkbox" id="enableLogging" checked />
+        <span>Enable logging</span>
+      </label>
+      <span class="logging-status" id="loggingStatus">0 entries logged</span>
+    </div>
+    
+    <div class="button-group">
+      <button id="exportCsvBtn" class="primary">📥 Export CSV</button>
+      <button id="clearLogsBtn" class="secondary">🗑 Clear Logs</button>
+    </div>
   </div>
 
   <div class="status" id="status"></div>
