@@ -311,10 +311,10 @@ function startConversationMonitoring() {
         // Wait for streaming to stop (debounce)
         responseDebounceTimer = setTimeout(() => {
           if (pendingResponse && !isLoggingResponse) {
-            console.log('[RTool] Response complete (no changes for 3s)');
+            console.log('[RTool] Response complete (no changes for 5s)');
             logCompletedResponse(pendingResponse);
           }
-        }, 3000); // Wait 3 seconds after last change
+        }, 5000); // Wait 5 seconds after last change
       }
     }
   });
@@ -329,48 +329,69 @@ function isResponseComplete() {
     console.log('[RTool] No site config, relying on debounce');
     return false;
   }
-  
+
   const detection = currentSiteConfig.detection;
-  
+
   // Check for "Stop" button (indicates still streaming)
   if (detection.stopButton) {
     const stopButton = document.querySelector(detection.stopButton);
-    if (stopButton) {
-      console.log('[RTool] Response incomplete: Stop button found');
+    if (stopButton && stopButton.offsetParent !== null) { // Check if visible
+      console.log('[RTool] Response incomplete: Stop button visible');
       return false;
     }
   }
-  
+
   // Check for regenerate button (indicates complete for ChatGPT)
   if (detection.regenerateButton) {
     const regenerateButton = document.querySelector(detection.regenerateButton);
-    if (regenerateButton) {
-      console.log('[RTool] Response complete: Regenerate button found');
+    if (regenerateButton && regenerateButton.offsetParent !== null) { // Check if visible
+      console.log('[RTool] Response complete: Regenerate button visible');
       return true;
     }
   }
-  
+
   // Check for streaming classes
   if (detection.streamingClasses && detection.streamingClasses.length > 0) {
     for (const className of detection.streamingClasses) {
       const indicators = document.querySelectorAll(`[class*="${className}"]`);
       if (indicators.length > 0) {
-        console.log(`[RTool] Response incomplete: Found ${indicators.length} '${className}' indicators`);
-        return false;
+        // Check if any are visible
+        const visibleIndicators = Array.from(indicators).filter(el => el.offsetParent !== null);
+        if (visibleIndicators.length > 0) {
+          console.log(`[RTool] Response incomplete: Found ${visibleIndicators.length} visible '${className}' indicators`);
+          return false;
+        }
       }
     }
   }
-  
-  // Check for completion buttons (Gemini)
+
+  // Check for completion buttons (Gemini) - multiple possible indicators
   if (detection.completionButtons && detection.completionButtons.length > 0) {
     const selector = detection.completionButtons.join(', ');
     const completionButtons = document.querySelectorAll(selector);
-    if (completionButtons.length > 0) {
-      console.log(`[RTool] Response complete: Found ${completionButtons.length} completion buttons`);
+    const visibleButtons = Array.from(completionButtons).filter(btn => btn.offsetParent !== null);
+    if (visibleButtons.length > 0) {
+      console.log(`[RTool] Response complete: Found ${visibleButtons.length} visible completion buttons`);
       return true;
     }
   }
-  
+
+  // For Gemini specifically, check for additional completion indicators
+  if (currentSiteKey === 'gemini') {
+    // Look for feedback/like buttons that appear when response is complete
+    const feedbackButtons = document.querySelectorAll('button[aria-label*="thumbs"], button[aria-label*="like"], button[aria-label*="dislike"]');
+    if (feedbackButtons.length > 0) {
+      console.log('[RTool] Response complete: Found feedback buttons');
+      return true;
+    }
+
+    // Check if the response has been stable for a while (additional check)
+    if (pendingResponse && pendingResponse.length > 100) {
+      console.log('[RTool] Response appears substantial, checking for stability');
+      // This will fall through to debounce logic
+    }
+  }
+
   // Default: assume incomplete (will rely on debounce)
   console.log('[RTool] Response status unknown, relying on debounce');
   return false;

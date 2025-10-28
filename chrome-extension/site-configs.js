@@ -94,7 +94,12 @@ const SITE_CONFIGS = {
             'constructing', 'discovering', 'gathering', 'finalizing',
             'preparing', 'compiling', 'assembling', 'building',
             'draft', 'details', 'intel', 'knowledge', 'information',
-            'just a sec', 'one moment', 'please wait'
+            'just a sec', 'one moment', 'please wait',
+
+            // Additional thinking/analysis phases
+            'seeking', 'analyzing', 'exploring', 'investigating', 'examining',
+            'researching', 'searching', 'finding', 'locating', 'identifying',
+            'processing', 'working', 'thinking', 'reasoning', 'considering'
           ]
         }
       ],
