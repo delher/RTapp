@@ -136,14 +136,26 @@ exportCsvBtn.addEventListener('click', () => {
   
   // Create CSV content
   const headers = ['Timestamp', 'Window', 'Transform', 'Prompt', 'Response', 'Source'];
-  const rows = sessionLogs.map(log => [
-    log.timestamp,
-    `Window ${log.windowIndex + 1}`,
-    log.transform || 'none:none',
-    `"${(log.prompt || '').replace(/"/g, '""')}"`, // Escape quotes
-    `"${(log.response || '(pending)').replace(/"/g, '""')}"`, // Escape quotes
-    log.source || 'rtool'
-  ]);
+  const rows = sessionLogs.map(log => {
+    // Format window name
+    let windowName;
+    if (log.windowIndex === 'Base') {
+      windowName = 'Base';
+    } else if (typeof log.windowIndex === 'number') {
+      windowName = `Window ${log.windowIndex + 1}`;
+    } else {
+      windowName = log.windowIndex;
+    }
+    
+    return [
+      log.timestamp,
+      windowName,
+      log.transform || 'none:none',
+      `"${(log.prompt || '').replace(/"/g, '""')}"`, // Escape quotes
+      `"${(log.response || '(pending)').replace(/"/g, '""')}"`, // Escape quotes
+      log.source || 'rtool'
+    ];
+  });
   
   const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
   
@@ -320,17 +332,32 @@ async function logToCSV(prompt, results) {
 
     const timestamp = new Date().toISOString();
     
-    // Add each window's result to logs (response will be added later when captured)
+    // Add one "Base" entry with the original prompt
+    sessionLogs.push({
+      timestamp: timestamp,
+      windowIndex: 'Base',
+      transform: 'none:none',
+      prompt: prompt,
+      response: '(pending)',
+      success: true,
+      source: 'rtool'
+    });
+    
+    // Only add individual window entries if they have transforms applied
     for (const result of results) {
-      sessionLogs.push({
-        timestamp: timestamp,
-        windowIndex: result.index,
-        transform: result.transform || 'none:none',
-        prompt: prompt,
-        response: '(pending)',
-        success: result.success || false,
-        source: 'rtool'
-      });
+      const hasTransform = result.transform && result.transform !== 'none:none';
+      
+      if (hasTransform) {
+        sessionLogs.push({
+          timestamp: timestamp,
+          windowIndex: result.index,
+          transform: result.transform,
+          prompt: prompt,
+          response: '(pending)',
+          success: result.success || false,
+          source: 'rtool'
+        });
+      }
     }
     
     // Save to storage
@@ -351,29 +378,42 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       return;
     }
 
-    // Check if there's a pending entry for this prompt
-    const pendingIndex = sessionLogs.findIndex(
-      log => log.windowIndex === windowIndex && 
+    // First, try to update the Base entry (untransformed prompt)
+    const basePendingIndex = sessionLogs.findIndex(
+      log => log.windowIndex === 'Base' && 
              log.prompt === prompt && 
              log.response === '(pending)'
     );
 
-    if (pendingIndex !== -1) {
-      // Update existing entry with response
-      sessionLogs[pendingIndex].response = response;
-      console.log('[RTool] Updated log entry with response');
+    if (basePendingIndex !== -1) {
+      // Update Base entry with response
+      sessionLogs[basePendingIndex].response = response;
+      console.log('[RTool] Updated Base log entry with response');
     } else {
-      // Add new entry (manual interaction)
-      sessionLogs.push({
-        timestamp: timestamp || new Date().toISOString(),
-        windowIndex: windowIndex,
-        transform: 'none:none', // Manual entries have no transform
-        prompt: prompt,
-        response: response,
-        success: true,
-        source: 'manual'
-      });
-      console.log('[RTool] Added manual interaction to log');
+      // Check if there's a pending entry for this specific window
+      const windowPendingIndex = sessionLogs.findIndex(
+        log => log.windowIndex === windowIndex && 
+               log.prompt === prompt && 
+               log.response === '(pending)'
+      );
+
+      if (windowPendingIndex !== -1) {
+        // Update existing window entry with response
+        sessionLogs[windowPendingIndex].response = response;
+        console.log(`[RTool] Updated window ${windowIndex} log entry with response`);
+      } else {
+        // Add new entry (manual interaction)
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          windowIndex: windowIndex,
+          transform: 'none:none', // Manual entries have no transform
+          prompt: prompt,
+          response: response,
+          success: true,
+          source: 'manual'
+        });
+        console.log('[RTool] Added manual interaction to log');
+      }
     }
     
     // Save to storage
