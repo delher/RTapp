@@ -1,7 +1,8 @@
 // Content script that runs in each opened window
 // Handles prompt injection, transformation, and conversation monitoring
 
-console.log('[RTool] Content script loaded');
+console.log('[RTool] Content script loaded at:', new Date().toISOString());
+console.log('[RTool] Running on URL:', window.location.href);
 
 // State for conversation monitoring
 let conversationObserver = null;
@@ -18,7 +19,7 @@ let currentSiteConfig = null;  // Current site configuration object
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('[RTool] Content script received message:', request.action);
+  console.log('[RTool] Content script received message:', request.action, 'at', new Date().toISOString());
 
   if (request.action === 'ping') {
     // Quick health check
