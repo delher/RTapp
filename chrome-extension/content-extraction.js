@@ -153,14 +153,38 @@ function extractContent(element, selectors) {
 
 // Check if message should be skipped based on filtering rules
 function shouldSkipMessage(element, content, filtering) {
-  if (!filtering || !filtering.skipPatterns) return false;
+  if (!filtering) return false;
+  
+  // Check minimum content length for short messages
+  if (filtering.minContentLength && content.length < filtering.minContentLength) {
+    // For short messages, be extra aggressive with filtering
+    const textLower = content.toLowerCase();
+    
+    // Skip if it contains ANY thinking-related keyword
+    const thinkingKeywords = [
+      'thinking', 'reasoning', 'analyzing', 'interpreting', 'sources',
+      'intent', 'noise', 'pattern', 'cipher', 'studies'
+    ];
+    
+    for (const keyword of thinkingKeywords) {
+      if (textLower.includes(keyword)) {
+        console.log(`[RTool] Skipping short message with keyword '${keyword}': ${content.substring(0, 50)}`);
+        return true;
+      }
+    }
+  }
+  
+  if (!filtering.skipPatterns) return false;
   
   for (const pattern of filtering.skipPatterns) {
     if (pattern.type === 'class') {
       const classList = element.className?.toLowerCase() || '';
+      const parentClass = element.parentElement?.className?.toLowerCase() || '';
+      const combined = classList + ' ' + parentClass;
+      
       for (const value of pattern.values) {
-        if (classList.includes(value)) {
-          console.log(`[RTool] Skipping message (class filter): ${content.substring(0, 50)}`);
+        if (combined.includes(value)) {
+          console.log(`[RTool] Skipping message (class filter '${value}'): ${content.substring(0, 50)}`);
           return true;
         }
       }
@@ -168,9 +192,12 @@ function shouldSkipMessage(element, content, filtering) {
     
     if (pattern.type === 'aria-label') {
       const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
+      const parentLabel = element.parentElement?.getAttribute('aria-label')?.toLowerCase() || '';
+      const combined = ariaLabel + ' ' + parentLabel;
+      
       for (const value of pattern.values) {
-        if (ariaLabel.includes(value)) {
-          console.log(`[RTool] Skipping message (aria-label filter): ${content.substring(0, 50)}`);
+        if (combined.includes(value)) {
+          console.log(`[RTool] Skipping message (aria-label filter '${value}'): ${content.substring(0, 50)}`);
           return true;
         }
       }
@@ -180,10 +207,11 @@ function shouldSkipMessage(element, content, filtering) {
       const textLower = content.toLowerCase();
       const maxLength = pattern.maxLength || 999999;
       
-      if (content.length < maxLength) {
+      if (content.length <= maxLength) {  // Changed < to <= for inclusive check
         for (const keyword of pattern.keywords) {
-          if (textLower.includes(keyword)) {
-            console.log(`[RTool] Skipping message (content filter): ${content.substring(0, 50)}`);
+          const keywordLower = keyword.toLowerCase();
+          if (textLower.includes(keywordLower)) {
+            console.log(`[RTool] Skipping message (content filter '${keyword}'): ${content.substring(0, 50)}`);
             return true;
           }
         }
@@ -191,11 +219,12 @@ function shouldSkipMessage(element, content, filtering) {
     }
   }
   
-  // Check skip selectors (for parent elements)
+  // Check skip selectors (for parent and ancestor elements)
   if (filtering.skipSelectors) {
     for (const selector of filtering.skipSelectors) {
-      if (element.closest(selector)) {
-        console.log(`[RTool] Skipping message (selector filter): ${content.substring(0, 50)}`);
+      // Check element itself and all parents
+      if (element.matches(selector) || element.closest(selector)) {
+        console.log(`[RTool] Skipping message (selector filter '${selector}'): ${content.substring(0, 50)}`);
         return true;
       }
     }

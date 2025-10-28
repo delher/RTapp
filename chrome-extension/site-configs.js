@@ -55,22 +55,41 @@ const SITE_CONFIGS = {
     filtering: {
       // Filter out Gemini's thinking sections
       skipPatterns: [
-        { type: 'class', values: ['thinking', 'reasoning'] },
-        { type: 'aria-label', values: ['thinking', 'show thinking'] },
+        { type: 'class', values: ['thinking', 'reasoning', 'expandable', 'collapsible'] },
+        { type: 'aria-label', values: ['thinking', 'show thinking', 'reasoning'] },
         { 
           type: 'content',
-          maxLength: 100,
+          maxLength: 150,  // Increased from 100 to catch longer headers
           keywords: [
+            // Core thinking keywords
             'thinking', 'reasoning', 'analyzing', 'interpreting', 
             'pinpointing', 'considering', 'evaluating', 'examining', 
-            'assessing', 'sources'
+            'assessing', 'exploring', 'investigating',
+            
+            // Header patterns
+            'sources', 'references', 'citations',
+            
+            // Intent/analysis patterns
+            'intent', 'noise', 'patterns', 'cipher',
+            'despite', 'recent studies', 'breakdown',
+            
+            // Common Gemini thinking prefixes
+            'analyzing ', 'interpreting ', 'considering ',
+            'examining ', 'evaluating ', 'pinpointing ',
+            'exploring ', 'investigating '
           ]
         }
       ],
       skipSelectors: [
-        '[aria-label*="thinking"]',
-        '[class*="thinking"]'
-      ]
+        '[aria-label*="thinking" i]',
+        '[aria-label*="reasoning" i]',
+        '[class*="thinking"]',
+        '[class*="reasoning"]',
+        '[data-expanded]',  // Expandable sections
+        'button[aria-expanded]'  // Collapsible elements
+      ],
+      // Additional filtering: skip very short messages that look like headers
+      minContentLength: 150  // Skip messages shorter than 150 chars if they match patterns
     }
   },
   
