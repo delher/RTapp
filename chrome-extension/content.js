@@ -250,54 +250,53 @@ function startConversationMonitoring() {
     
     const latest = messages[messages.length - 1];
     console.log('[RTool] MutationObserver found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
+    
+    // Check if it's a new prompt or response
+    if (latest.role === 'user' && latest.content !== lastPrompt) {
+      lastPrompt = latest.content;
+      console.log('[RTool] Detected manual prompt:', lastPrompt.substring(0, 100));
+      // Reset response state for new prompt
+      lastResponse = null;
+      pendingResponse = null;
+      isLoggingResponse = false;
+      if (responseDebounceTimer) {
+        clearTimeout(responseDebounceTimer);
+        responseDebounceTimer = null;
+      }
+    } else if (latest.role === 'assistant') {
+      // Skip if we're already logging this response
+      if (isLoggingResponse) {
+        return;
+      }
       
-      // Check if it's a new prompt or response
-      if (latest.role === 'user' && latest.content !== lastPrompt) {
-        lastPrompt = latest.content;
-        console.log('[RTool] Detected manual prompt:', lastPrompt.substring(0, 100));
-        // Reset response state for new prompt
-        lastResponse = null;
-        pendingResponse = null;
-        isLoggingResponse = false;
-        if (responseDebounceTimer) {
-          clearTimeout(responseDebounceTimer);
-          responseDebounceTimer = null;
-        }
-      } else if (latest.role === 'assistant') {
-        // Skip if we're already logging this response
-        if (isLoggingResponse) {
-          return;
-        }
-        
-        // Skip if content hasn't changed
-        if (latest.content === lastResponse || latest.content === pendingResponse) {
-          return;
-        }
-        
-        // Response is updating (streaming)
-        pendingResponse = latest.content;
-        
-        // Clear existing timer
-        if (responseDebounceTimer) {
-          clearTimeout(responseDebounceTimer);
-        }
-        
-        // Check if response is complete
-        const isComplete = isResponseComplete();
-        
-        if (isComplete) {
-          // Log immediately if we detect completion
-          console.log('[RTool] Response complete (detected completion indicator)');
-          logCompletedResponse(pendingResponse);
-        } else {
-          // Wait for streaming to stop (debounce)
-          responseDebounceTimer = setTimeout(() => {
-            if (pendingResponse && !isLoggingResponse) {
-              console.log('[RTool] Response complete (no changes for 3s)');
-              logCompletedResponse(pendingResponse);
-            }
-          }, 3000); // Wait 3 seconds after last change
-        }
+      // Skip if content hasn't changed
+      if (latest.content === lastResponse || latest.content === pendingResponse) {
+        return;
+      }
+      
+      // Response is updating (streaming)
+      pendingResponse = latest.content;
+      
+      // Clear existing timer
+      if (responseDebounceTimer) {
+        clearTimeout(responseDebounceTimer);
+      }
+      
+      // Check if response is complete
+      const isComplete = isResponseComplete();
+      
+      if (isComplete) {
+        // Log immediately if we detect completion
+        console.log('[RTool] Response complete (detected completion indicator)');
+        logCompletedResponse(pendingResponse);
+      } else {
+        // Wait for streaming to stop (debounce)
+        responseDebounceTimer = setTimeout(() => {
+          if (pendingResponse && !isLoggingResponse) {
+            console.log('[RTool] Response complete (no changes for 3s)');
+            logCompletedResponse(pendingResponse);
+          }
+        }, 3000); // Wait 3 seconds after last change
       }
     }
   });
