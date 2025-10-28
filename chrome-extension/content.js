@@ -1,8 +1,17 @@
 // Content script that runs in each opened window
 // Handles prompt injection, transformation, and conversation monitoring
 
+console.log('=== RTOOL CONTENT SCRIPT LOADED ===');
 console.log('[RTool] Content script loaded at:', new Date().toISOString());
 console.log('[RTool] Running on URL:', window.location.href);
+console.log('[RTool] Document ready state:', document.readyState);
+
+// Test basic functionality
+try {
+  console.log('[RTool] Basic DOM access test:', document.body ? 'OK' : 'FAILED');
+} catch (e) {
+  console.error('[RTool] DOM access error:', e);
+}
 
 // State for conversation monitoring
 let conversationObserver = null;

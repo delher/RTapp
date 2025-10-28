@@ -20,7 +20,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["site-configs.js"],
+      "resources": ["site-configs.js", "content-extraction.js"],
       "matches": ["<all_urls>"]
     }
   ],
