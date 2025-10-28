@@ -290,16 +290,23 @@ function startConversationMonitoring() {
 
     // Check if it's a new prompt or response
     if (latest.role === 'user' && latest.content !== lastPrompt) {
-      lastPrompt = latest.content;
-      console.log('[RTool] ✓ Detected NEW manual prompt:', lastPrompt.substring(0, 100));
-      // Reset response state for new prompt
-      lastResponse = null;
-      pendingResponse = null;
-      isLoggingResponse = false;
-      lastResponseTime = 0; // Reset response timing
-      if (responseDebounceTimer) {
-        clearTimeout(responseDebounceTimer);
-        responseDebounceTimer = null;
+      // Check if this prompt was already captured by input monitoring
+      const wasCapturedByInput = window.lastCapturedPrompt === latest.content;
+      if (wasCapturedByInput) {
+        console.log('[RTool] User prompt already captured by input monitoring, skipping DOM detection');
+        lastPrompt = latest.content; // Still set for response association
+      } else {
+        console.log('[RTool] ✓ Detected NEW manual prompt from DOM:', latest.content.substring(0, 100));
+        lastPrompt = latest.content;
+        // Reset response state for new prompt
+        lastResponse = null;
+        pendingResponse = null;
+        isLoggingResponse = false;
+        lastResponseTime = 0; // Reset response timing
+        if (responseDebounceTimer) {
+          clearTimeout(responseDebounceTimer);
+          responseDebounceTimer = null;
+        }
       }
     } else if (latest.role === 'assistant') {
       console.log('[RTool] Assistant response detected, lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
@@ -455,6 +462,9 @@ function captureManualPrompt(promptText) {
   }
   window.lastPromptCaptureTime = now;
 
+  // Mark this prompt as captured by input monitoring
+  window.lastCapturedPrompt = promptText;
+
   lastPrompt = promptText;
   console.log('[RTool] ✓ Captured manual prompt:', promptText.substring(0, 100));
 
@@ -564,15 +574,6 @@ function logCompletedResponse(responseText) {
   if (lastResponse === responseText) {
     console.log('[RTool] Already logged this exact response, skipping');
     return;
-  }
-
-  // For Gemini, add extra delay to ensure response is truly complete
-  if (currentSiteKey === 'gemini') {
-    const timeSinceResponseStart = lastResponseTime > 0 ? Date.now() - lastResponseTime : 0;
-    if (timeSinceResponseStart < 3000) { // Response must have been streaming for at least 3 seconds
-      console.log(`[RTool] Gemini response too new (${timeSinceResponseStart/1000}s), waiting longer`);
-      return;
-    }
   }
 
   isLoggingResponse = true;
