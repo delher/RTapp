@@ -502,6 +502,11 @@ async function logToCSV(prompt, results) {
     const timestamp = new Date().toISOString();
     const userIdValue = userId.value.trim();
     
+    // Get current site URL
+    const siteKey = siteSelect.value;
+    const siteConfig = getSiteConfig(siteKey);
+    const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
+    
     // Add entry for each window with base prompt and transformed prompt
     for (const result of results) {
       // Parse the transform
@@ -517,13 +522,13 @@ async function logToCSV(prompt, results) {
       sessionLogs.push({
         timestamp: timestamp,
         userId: userIdValue,
+        url: siteUrl,
         windowIndex: result.index,
         basePrompt: prompt, // Original untransformed prompt
         transform: result.transform || 'none:none',
         prompt: transformedPrompt, // Transformed prompt
         response: '(pending)',
-        success: result.success || false,
-        source: 'rtool'
+        success: result.success || false
       });
     }
     
@@ -559,16 +564,22 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
     } else {
       // Add new entry (manual interaction)
       const userIdValue = userId.value.trim() || '(unknown)';
+      
+      // Get current site URL
+      const siteKey = siteSelect.value;
+      const siteConfig = getSiteConfig(siteKey);
+      const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
+      
       sessionLogs.push({
         timestamp: timestamp || new Date().toISOString(),
         userId: userIdValue,
+        url: siteUrl,
         windowIndex: windowIndex,
         basePrompt: 'Manual Entry', // Manual entries marked as such
         transform: 'none:none', // Manual entries have no transform
         prompt: prompt, // Manual entries: just the prompt they typed
         response: response,
-        success: true,
-        source: 'manual'
+        success: true
       });
       console.log('[RTool] Added manual interaction to log');
     }

@@ -112,27 +112,58 @@ function extractConversationMessagesWithConfig(siteConfig) {
 // Detect role from element and config
 function detectRole(element, roleIndicators) {
   if (!roleIndicators) return null;
-  
+
   const classList = element.className?.toLowerCase() || '';
   const parentClass = element.parentElement?.className?.toLowerCase() || '';
   const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
   const dataTestId = element.getAttribute('data-test-id')?.toLowerCase() || '';
-  const combined = `${classList} ${parentClass} ${ariaLabel} ${dataTestId}`;
-  
+  const dataRole = element.getAttribute('data-role')?.toLowerCase() || '';
+  const roleAttr = element.getAttribute('role')?.toLowerCase() || '';
+  const combined = `${classList} ${parentClass} ${ariaLabel} ${dataTestId} ${dataRole} ${roleAttr}`;
+
   // Check user indicators
   if (roleIndicators.user) {
     for (const indicator of roleIndicators.user) {
-      if (combined.includes(indicator.toLowerCase())) return 'user';
+      if (combined.includes(indicator.toLowerCase())) {
+        console.log(`[RTool] Detected user role from indicator: ${indicator}`);
+        return 'user';
+      }
     }
   }
-  
+
   // Check assistant indicators
   if (roleIndicators.assistant) {
     for (const indicator of roleIndicators.assistant) {
-      if (combined.includes(indicator.toLowerCase())) return 'assistant';
+      if (combined.includes(indicator.toLowerCase())) {
+        console.log(`[RTool] Detected assistant role from indicator: ${indicator}`);
+        return 'assistant';
+      }
     }
   }
-  
+
+  // Fallback: check parent elements up to 3 levels
+  let parent = element.parentElement;
+  for (let i = 0; i < 3 && parent; i++) {
+    const pClass = parent.className?.toLowerCase() || '';
+    const pAria = parent.getAttribute('aria-label')?.toLowerCase() || '';
+    const pData = parent.getAttribute('data-test-id')?.toLowerCase() || '';
+
+    for (const indicator of roleIndicators.user) {
+      if (pClass.includes(indicator) || pAria.includes(indicator) || pData.includes(indicator)) {
+        console.log(`[RTool] Detected user role from parent indicator: ${indicator}`);
+        return 'user';
+      }
+    }
+    for (const indicator of roleIndicators.assistant) {
+      if (pClass.includes(indicator) || pAria.includes(indicator) || pData.includes(indicator)) {
+        console.log(`[RTool] Detected assistant role from parent indicator: ${indicator}`);
+        return 'assistant';
+      }
+    }
+    parent = parent.parentElement;
+  }
+
+  console.log(`[RTool] Could not detect role for element with classes: ${classList}`);
   return null;
 }
 

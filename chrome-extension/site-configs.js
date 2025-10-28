@@ -26,22 +26,31 @@ const SITE_CONFIGS = {
     name: 'Gemini',
     url: 'https://gemini.google.com/',
     detection: {
-      // Multiple detection strategies
+      // Multiple detection strategies - more flexible selectors
       messageSelectors: [
-        '[class*="message-content"]',
-        '[class*="query-"]',
-        '[class*="response-"]',
+        '[class*="message"]',
+        '[class*="query"]',
+        '[class*="response"]',
+        '[data-message-id]',
+        '[role="row"]',
+        '.message',
+        '.query',
+        '.response',
         'message-content'
       ],
       containerSelectors: [
         '[class*="conversation"]',
-        '[class*="chat-history"]',
-        'chat-window',
-        'main'
+        '[class*="chat"]',
+        '[class*="thread"]',
+        'main',
+        '[role="main"]',
+        '.conversation',
+        '.chat-history',
+        'chat-window'
       ],
       roleIndicators: {
-        user: ['user', 'query'],
-        assistant: ['model', 'assistant', 'bot', 'response']
+        user: ['user', 'query', 'human', 'you'],
+        assistant: ['model', 'assistant', 'bot', 'response', 'gemini', 'ai']
       },
       
       // Completion detection
@@ -54,7 +63,7 @@ const SITE_CONFIGS = {
     },
     filtering: {
       // Minimum response length to log (filters out streaming status messages)
-      minResponseLength: 100,  // Responses must be at least 100 chars
+      minResponseLength: 50,  // Responses must be at least 50 chars
       
       // Filter out Gemini's thinking sections and streaming status messages
       skipPatterns: [
