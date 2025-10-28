@@ -171,7 +171,7 @@ exportCsvBtn.addEventListener('click', () => {
   }
   
   // Create CSV content
-  const headers = ['Timestamp', 'User ID', 'Window', 'Transform', 'Prompt', 'Response', 'Source'];
+  const headers = ['Timestamp', 'User ID', 'Window', 'Base Prompt', 'Transform', 'Prompt', 'Response', 'Source'];
   const rows = sessionLogs.map(log => {
     // Format window name
     let windowName;
@@ -187,9 +187,10 @@ exportCsvBtn.addEventListener('click', () => {
       log.timestamp,
       log.userId || '',
       windowName,
+      `"${(log.basePrompt || '').replace(/"/g, '""')}"`, // Base prompt (untransformed)
       log.transform || 'none:none',
-      `"${(log.prompt || '').replace(/"/g, '""')}"`, // Escape quotes
-      `"${(log.response || '(pending)').replace(/"/g, '""')}"`, // Escape quotes
+      `"${(log.prompt || '').replace(/"/g, '""')}"`, // Transformed prompt
+      `"${(log.response || '(pending)').replace(/"/g, '""')}"`,
       log.source || 'rtool'
     ];
   });
@@ -492,19 +493,7 @@ async function logToCSV(prompt, results) {
     const timestamp = new Date().toISOString();
     const userIdValue = userId.value.trim();
     
-    // Add one "Base" entry with the original untransformed prompt
-    sessionLogs.push({
-      timestamp: timestamp,
-      userId: userIdValue,
-      windowIndex: 'Base',
-      transform: 'none:none',
-      prompt: prompt,
-      response: '(pending)',
-      success: true,
-      source: 'rtool'
-    });
-    
-    // Add entry for each window with its transform and transformed prompt
+    // Add entry for each window with base prompt and transformed prompt
     for (const result of results) {
       // Parse the transform
       const transformParts = (result.transform || 'none:none').split(':');
@@ -520,8 +509,9 @@ async function logToCSV(prompt, results) {
         timestamp: timestamp,
         userId: userIdValue,
         windowIndex: result.index,
+        basePrompt: prompt, // Original untransformed prompt
         transform: result.transform || 'none:none',
-        prompt: transformedPrompt,
+        prompt: transformedPrompt, // Transformed prompt
         response: '(pending)',
         success: result.success || false,
         source: 'rtool'
@@ -546,44 +536,32 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       return;
     }
 
-    // First, try to update the Base entry (untransformed prompt)
-    const basePendingIndex = sessionLogs.findIndex(
-      log => log.windowIndex === 'Base' && 
-             log.prompt === prompt && 
+    // Try to find a pending entry for this window with matching prompt or basePrompt
+    const windowPendingIndex = sessionLogs.findIndex(
+      log => log.windowIndex === windowIndex && 
+             (log.prompt === prompt || log.basePrompt === prompt) && 
              log.response === '(pending)'
     );
 
-    if (basePendingIndex !== -1) {
-      // Update Base entry with response
-      sessionLogs[basePendingIndex].response = response;
-      console.log('[RTool] Updated Base log entry with response');
+    if (windowPendingIndex !== -1) {
+      // Update existing window entry with response
+      sessionLogs[windowPendingIndex].response = response;
+      console.log(`[RTool] Updated window ${windowIndex} log entry with response`);
     } else {
-      // Check if there's a pending entry for this specific window
-      const windowPendingIndex = sessionLogs.findIndex(
-        log => log.windowIndex === windowIndex && 
-               log.prompt === prompt && 
-               log.response === '(pending)'
-      );
-
-      if (windowPendingIndex !== -1) {
-        // Update existing window entry with response
-        sessionLogs[windowPendingIndex].response = response;
-        console.log(`[RTool] Updated window ${windowIndex} log entry with response`);
-      } else {
-        // Add new entry (manual interaction)
-        const userIdValue = userId.value.trim() || '(unknown)';
-        sessionLogs.push({
-          timestamp: timestamp || new Date().toISOString(),
-          userId: userIdValue,
-          windowIndex: windowIndex,
-          transform: 'none:none', // Manual entries have no transform
-          prompt: prompt,
-          response: response,
-          success: true,
-          source: 'manual'
-        });
-        console.log('[RTool] Added manual interaction to log');
-      }
+      // Add new entry (manual interaction)
+      const userIdValue = userId.value.trim() || '(unknown)';
+      sessionLogs.push({
+        timestamp: timestamp || new Date().toISOString(),
+        userId: userIdValue,
+        windowIndex: windowIndex,
+        basePrompt: prompt, // Manual entries: base = prompt
+        transform: 'none:none', // Manual entries have no transform
+        prompt: prompt, // Manual entries: prompt = base
+        response: response,
+        success: true,
+        source: 'manual'
+      });
+      console.log('[RTool] Added manual interaction to log');
     }
     
     // Save to storage
