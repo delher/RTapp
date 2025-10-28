@@ -11,6 +11,7 @@ let windowIndex = null;
 let isMonitoring = false;
 let responseDebounceTimer = null;
 let pendingResponse = null;
+let isLoggingResponse = false; // Prevent concurrent logging
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -246,7 +247,22 @@ function startConversationMonitoring() {
         // Reset response state for new prompt
         lastResponse = null;
         pendingResponse = null;
-      } else if (latest.role === 'assistant' && latest.content !== lastResponse) {
+        isLoggingResponse = false;
+        if (responseDebounceTimer) {
+          clearTimeout(responseDebounceTimer);
+          responseDebounceTimer = null;
+        }
+      } else if (latest.role === 'assistant') {
+        // Skip if we're already logging this response
+        if (isLoggingResponse) {
+          return;
+        }
+        
+        // Skip if content hasn't changed
+        if (latest.content === lastResponse || latest.content === pendingResponse) {
+          return;
+        }
+        
         // Response is updating (streaming)
         pendingResponse = latest.content;
         
@@ -265,8 +281,10 @@ function startConversationMonitoring() {
         } else {
           // Wait for streaming to stop (debounce)
           responseDebounceTimer = setTimeout(() => {
-            console.log('[RTool] Response complete (no changes for 3s)');
-            logCompletedResponse(pendingResponse);
+            if (pendingResponse && !isLoggingResponse) {
+              console.log('[RTool] Response complete (no changes for 3s)');
+              logCompletedResponse(pendingResponse);
+            }
           }, 3000); // Wait 3 seconds after last change
         }
       }
@@ -303,15 +321,23 @@ function isResponseComplete() {
 
 // Log the completed response
 function logCompletedResponse(responseText) {
-  if (lastResponse === responseText) {
-    // Already logged this response
+  // Prevent concurrent calls
+  if (isLoggingResponse) {
+    console.log('[RTool] Already logging, skipping duplicate');
     return;
   }
   
+  // Prevent duplicate logging
+  if (lastResponse === responseText) {
+    console.log('[RTool] Already logged this exact response, skipping');
+    return;
+  }
+  
+  isLoggingResponse = true;
   lastResponse = responseText;
   pendingResponse = null;
   
-  console.log('[RTool] Logging response:', responseText.substring(0, 100) + '...');
+  console.log('[RTool] Logging response (length:', responseText.length, '):', responseText.substring(0, 100) + '...');
   
   // Send to background for logging
   if (lastPrompt) {
@@ -321,7 +347,18 @@ function logCompletedResponse(responseText) {
       prompt: lastPrompt,
       response: lastResponse,
       timestamp: new Date().toISOString()
+    }).then(() => {
+      console.log('[RTool] Response logged successfully');
+      // Reset flag after a delay to allow for next response
+      setTimeout(() => {
+        isLoggingResponse = false;
+      }, 1000);
+    }).catch(err => {
+      console.error('[RTool] Failed to log response:', err);
+      isLoggingResponse = false;
     });
+  } else {
+    isLoggingResponse = false;
   }
 }
 
