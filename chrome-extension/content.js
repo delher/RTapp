@@ -18,12 +18,14 @@ let currentSiteConfig = null;  // Current site configuration object
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[RTool] Content script received message:', request.action);
+
   if (request.action === 'ping') {
     // Quick health check
     sendResponse({ status: 'ready' });
     return false;
   }
-  
+
   if (request.action === 'injectPrompt') {
     console.log('[RTool] Received inject prompt request');
     windowIndex = request.windowIndex;
@@ -35,12 +37,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     injectPrompt(request.prompt, request.transform).then(sendResponse);
     return true; // Will respond asynchronously
   } else if (request.action === 'startMonitoring') {
-    console.log('[RTool] Starting conversation monitoring');
+    console.log('[RTool] Received startMonitoring message');
     windowIndex = request.windowIndex;
     if (request.siteKey) {
       currentSiteKey = request.siteKey;
       currentSiteConfig = getSiteConfig(currentSiteKey);
-      console.log('[RTool] Using site config for monitoring:', currentSiteKey, currentSiteConfig?.name);
+      console.log('[RTool] Set site config for monitoring:', currentSiteKey, currentSiteConfig?.name);
     }
     startConversationMonitoring();
     sendResponse({ success: true });
@@ -246,14 +248,20 @@ function applyTransform(text, transform) {
 
 // Start monitoring conversation for manual interactions
 function startConversationMonitoring() {
-  if (isMonitoring) return;
+  console.log('[RTool] startConversationMonitoring called');
+  if (isMonitoring) {
+    console.log('[RTool] Already monitoring, skipping');
+    return;
+  }
   isMonitoring = true;
-  
+  console.log('[RTool] Starting conversation monitoring');
+
   // Watch for new messages in the conversation
   const targetNode = document.body;
   const config = { childList: true, subtree: true };
-  
+
   conversationObserver = new MutationObserver((mutations) => {
+    console.log(`[RTool] MutationObserver fired: ${mutations.length} mutations`);
     // Look for new conversation items
     const messages = extractConversationMessages();
     
@@ -478,15 +486,20 @@ function stopConversationMonitoring() {
 
 // Extract messages from the page using site-specific configuration
 function extractConversationMessages() {
+  console.log('[RTool] extractConversationMessages called, currentSiteConfig:', !!currentSiteConfig);
+
   // Use config-driven extraction if available
   if (currentSiteConfig) {
+    console.log(`[RTool] Using config for ${currentSiteConfig.name}`);
     const messages = extractConversationMessagesWithConfig(currentSiteConfig);
     if (messages && messages.length > 0) {
       console.log(`[RTool] Config extraction successful: ${messages.length} messages`);
       return messages;
     } else {
-      console.log('[RTool] Config extraction failed, using fallback');
+      console.log('[RTool] Config extraction failed (returned 0 messages), using fallback');
     }
+  } else {
+    console.log('[RTool] No site config available');
   }
 
   // Fallback to legacy extraction
