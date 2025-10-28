@@ -17,6 +17,9 @@
   </div>
 
   <div class="section">
+    <label>User ID: <span class="required">*</span></label>
+    <input type="text" id="userId" placeholder="Enter your user ID" required />
+    
     <label>Instances:</label>
     <select id="instanceCount">
       <option value="1">1</option>
@@ -34,7 +37,10 @@
 
   <div class="section">
     <label>Prompt:</label>
-    <textarea id="promptInput" rows="3" placeholder="Enter your prompt here..."></textarea>
+    <div class="prompt-controls">
+      <textarea id="promptInput" rows="3" placeholder="Enter your prompt here..."></textarea>
+      <button id="recycleBtn" class="recycle-btn" title="Reload last prompt">♻️ Recycle</button>
+    </div>
     <button id="sendBtn" class="primary">Send to All Windows</button>
   </div>
 

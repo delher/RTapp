@@ -1,10 +1,12 @@
 // Popup UI logic for RTool Chrome Extension
 
+const userId = document.getElementById('userId');
 const instanceCount = document.getElementById('instanceCount');
 const siteUrl = document.getElementById('siteUrl');
 const openBtn = document.getElementById('openBtn');
 const closeBtn = document.getElementById('closeBtn');
 const promptInput = document.getElementById('promptInput');
+const recycleBtn = document.getElementById('recycleBtn');
 const sendBtn = document.getElementById('sendBtn');
 const status = document.getElementById('status');
 const transformsList = document.getElementById('transformsList');
@@ -12,6 +14,7 @@ const detachBtn = document.getElementById('detachBtn');
 
 let activeWindows = [];
 let windowTransforms = {};
+let lastPrompt = '';
 
 // Listen for conversation logs from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -45,6 +48,19 @@ detachBtn.addEventListener('click', () => {
   });
   window.close(); // Close the extension popup
 });
+
+// Recycle last prompt
+recycleBtn.addEventListener('click', () => {
+  if (lastPrompt) {
+    promptInput.value = lastPrompt;
+    updateStatus('♻️ Reloaded last prompt', 'success');
+  } else {
+    updateStatus('No previous prompt to recycle', 'error');
+  }
+});
+
+// Save userId when it changes
+userId.addEventListener('change', saveUserSettings);
 
 // Transform options (same structure as Electron app)
 const transformOptions = {
@@ -103,7 +119,27 @@ const transformOptions = {
     sendBtn.disabled = false;
   }
   await loadLoggingConfig(); // Load saved logging configuration
+  await loadUserSettings(); // Load saved user settings
 })();
+
+// Load user settings
+async function loadUserSettings() {
+  const data = await chrome.storage.local.get(['userId', 'lastPrompt']);
+  if (data.userId) {
+    userId.value = data.userId;
+  }
+  if (data.lastPrompt) {
+    lastPrompt = data.lastPrompt;
+  }
+}
+
+// Save user settings
+async function saveUserSettings() {
+  await chrome.storage.local.set({
+    userId: userId.value.trim(),
+    lastPrompt: lastPrompt
+  });
+}
 
 // CSV Logging
 const enableLogging = document.getElementById('enableLogging');
@@ -135,7 +171,7 @@ exportCsvBtn.addEventListener('click', () => {
   }
   
   // Create CSV content
-  const headers = ['Timestamp', 'Window', 'Transform', 'Prompt', 'Response', 'Source'];
+  const headers = ['Timestamp', 'User ID', 'Window', 'Transform', 'Prompt', 'Response', 'Source'];
   const rows = sessionLogs.map(log => {
     // Format window name
     let windowName;
@@ -149,6 +185,7 @@ exportCsvBtn.addEventListener('click', () => {
     
     return [
       log.timestamp,
+      log.userId || '',
       windowName,
       log.transform || 'none:none',
       `"${(log.prompt || '').replace(/"/g, '""')}"`, // Escape quotes
@@ -267,12 +304,23 @@ closeBtn.addEventListener('click', async () => {
 
 // Send prompt
 sendBtn.addEventListener('click', async () => {
+  const userIdValue = userId.value.trim();
   const prompt = promptInput.value.trim();
+  
+  if (!userIdValue) {
+    updateStatus('Please enter a User ID', 'error');
+    userId.focus();
+    return;
+  }
   
   if (!prompt) {
     updateStatus('Please enter a prompt', 'error');
     return;
   }
+  
+  // Save prompt for recycle feature
+  lastPrompt = prompt;
+  await saveUserSettings();
   
   // Check windows without resetting state
   try {
@@ -442,10 +490,12 @@ async function logToCSV(prompt, results) {
     }
 
     const timestamp = new Date().toISOString();
+    const userIdValue = userId.value.trim();
     
     // Add one "Base" entry with the original untransformed prompt
     sessionLogs.push({
       timestamp: timestamp,
+      userId: userIdValue,
       windowIndex: 'Base',
       transform: 'none:none',
       prompt: prompt,
@@ -468,6 +518,7 @@ async function logToCSV(prompt, results) {
       
       sessionLogs.push({
         timestamp: timestamp,
+        userId: userIdValue,
         windowIndex: result.index,
         transform: result.transform || 'none:none',
         prompt: transformedPrompt,
@@ -520,8 +571,10 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         console.log(`[RTool] Updated window ${windowIndex} log entry with response`);
       } else {
         // Add new entry (manual interaction)
+        const userIdValue = userId.value.trim() || '(unknown)';
         sessionLogs.push({
           timestamp: timestamp || new Date().toISOString(),
+          userId: userIdValue,
           windowIndex: windowIndex,
           transform: 'none:none', // Manual entries have no transform
           prompt: prompt,
