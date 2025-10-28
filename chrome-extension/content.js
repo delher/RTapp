@@ -279,12 +279,14 @@ function startConversationMonitoring() {
     const messages = extractConversationMessages();
 
     if (messages.length === 0) {
+      console.log('[RTool] No messages found, skipping');
       return; // No messages found, skip
     }
 
     const latest = messages[messages.length - 1];
-    console.log('[RTool] MutationObserver found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
+    console.log('[RTool] Found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
     console.log('[RTool] Latest content preview:', latest.content.substring(0, 80));
+    console.log('[RTool] Current lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
 
     // Check if it's a new prompt or response
     if (latest.role === 'user' && latest.content !== lastPrompt) {
@@ -445,6 +447,14 @@ function captureManualPrompt(promptText) {
     return;
   }
 
+  // Prevent rapid duplicate captures
+  const now = Date.now();
+  if (window.lastPromptCaptureTime && (now - window.lastPromptCaptureTime) < 1000) {
+    console.log('[RTool] Manual prompt captured too recently, skipping');
+    return;
+  }
+  window.lastPromptCaptureTime = now;
+
   lastPrompt = promptText;
   console.log('[RTool] ✓ Captured manual prompt:', promptText.substring(0, 100));
 
@@ -459,7 +469,7 @@ function captureManualPrompt(promptText) {
     responseDebounceTimer = null;
   }
 
-  // Optionally send to popup for immediate logging
+  // Send to popup to create the entry
   chrome.runtime.sendMessage({
     action: 'manualPrompt',
     windowIndex: windowIndex,

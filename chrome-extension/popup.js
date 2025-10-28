@@ -607,34 +607,37 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
     }
 
     console.log(`[RTool] addLogEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}, response length=${response?.length}`);
-    console.log(`[RTool] Current sessionLogs length: ${sessionLogs.length}`);
-    console.log(`[RTool] Current sessionLogs:`, sessionLogs.map(log => ({
-      window: log.windowIndex,
-      prompt: log.prompt?.substring(0, 20),
-      response: log.response?.substring(0, 20),
-      pending: log.response === '(pending)'
-    })));
 
     // Try to find a pending entry for this window
     let windowPendingIndex = -1;
 
     if (prompt) {
       // If we have a prompt, try to match it to existing pending entries
-      windowPendingIndex = sessionLogs.findIndex(
+      // For manual prompts, the entry was created with the prompt text
+      const matchingEntries = sessionLogs.filter(
         log => log.windowIndex === windowIndex &&
                log.response === '(pending)' &&
                (log.basePrompt === prompt || log.prompt === prompt)
       );
-      console.log(`[RTool] Searched for pending entry with prompt, found index: ${windowPendingIndex}`);
+      console.log(`[RTool] Found ${matchingEntries.length} matching pending entries for prompt`);
+
+      if (matchingEntries.length > 0) {
+        windowPendingIndex = sessionLogs.indexOf(matchingEntries[0]);
+        console.log(`[RTool] Using first match at index: ${windowPendingIndex}`);
+      } else {
+        console.log(`[RTool] No matching pending entries found for prompt`);
+      }
     } else {
       // If no prompt provided (RTOOL response), find any pending entry for this window
-      const pendingEntries = sessionLogs.filter(log => log.response === '(pending)');
-      console.log(`[RTool] Found ${pendingEntries.length} total pending entries:`, pendingEntries.map(log => `window ${log.windowIndex}`));
+      const pendingEntries = sessionLogs.filter(log => log.response === '(pending)' && log.windowIndex === windowIndex);
+      console.log(`[RTool] Found ${pendingEntries.length} pending entries for window ${windowIndex}`);
 
-      windowPendingIndex = sessionLogs.findIndex(
-        log => log.windowIndex === windowIndex && log.response === '(pending)'
-      );
-      console.log(`[RTool] Searched for pending entry in window ${windowIndex}, found index: ${windowPendingIndex}`);
+      if (pendingEntries.length > 0) {
+        windowPendingIndex = sessionLogs.indexOf(pendingEntries[0]);
+        console.log(`[RTool] Using first pending entry at index: ${windowPendingIndex}`);
+      } else {
+        console.log(`[RTool] No pending entries found for window ${windowIndex}`);
+      }
     }
 
     if (windowPendingIndex !== -1) {
@@ -642,8 +645,8 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       sessionLogs[windowPendingIndex].response = response;
       console.log(`[RTool] Updated window ${windowIndex} log entry with response: ${response.substring(0, 50)}...`);
     } else {
-      // No pending entry found - this is a manual interaction with no associated prompt
-      console.log(`[RTool] No pending entry found for window ${windowIndex}, creating new manual entry`);
+      // No pending entry found - create new entry anyway so responses don't get lost
+      console.log(`[RTool] No pending entry found for window ${windowIndex}, creating new entry`);
 
       // Check if we already have this exact response (avoid duplicates)
       const existingResponse = sessionLogs.findIndex(
@@ -656,7 +659,7 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         return;
       }
 
-      // Add new entry (manual interaction)
+      // Add new entry
       const userIdValue = userId.value.trim() || '(unknown)';
 
       // Get current site URL
@@ -669,13 +672,13 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         userId: userIdValue,
         url: siteUrl,
         windowIndex: windowIndex,
-        basePrompt: prompt || 'Manual Entry', // Use prompt if available, otherwise mark as manual
-        transform: 'none:none', // Manual entries have no transform
-        prompt: prompt || 'Manual Entry', // Use prompt if available
+        basePrompt: prompt || 'Manual Response', // Use prompt if available
+        transform: 'none:none',
+        prompt: prompt || 'Manual Response',
         response: response,
         success: true
       });
-      console.log(`[RTool] Added ${prompt ? 'manual' : 'RTOOL'} interaction to log for window ${windowIndex}`);
+      console.log(`[RTool] Added response-only entry for window ${windowIndex}`);
     }
     
     // Save to storage
