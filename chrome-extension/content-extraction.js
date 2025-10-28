@@ -189,7 +189,7 @@ function shouldSkipMessage(element, content, filtering) {
   
   // Check minimum response length (hard filter for very short responses)
   if (filtering.minResponseLength && content.length < filtering.minResponseLength) {
-    console.log(`[RTool] Skipping message too short (${content.length} < ${filtering.minResponseLength}): ${content.substring(0, 50)}`);
+    console.log(`[RTool] Skipping response too short (${content.length} < ${filtering.minResponseLength}): "${content}"`);
     return true;
   }
   

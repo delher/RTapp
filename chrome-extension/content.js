@@ -277,6 +277,7 @@ function startConversationMonitoring() {
         responseDebounceTimer = null;
       }
     } else if (latest.role === 'assistant') {
+      console.log('[RTool] Assistant response detected, lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
       // Skip if we're already logging this response
       if (isLoggingResponse) {
         console.log('[RTool] Skipping: already logging');
@@ -437,11 +438,19 @@ function stopConversationMonitoring() {
 function extractConversationMessages() {
   // Use config-driven extraction if available
   if (currentSiteConfig) {
-    return extractConversationMessagesWithConfig(currentSiteConfig);
+    const messages = extractConversationMessagesWithConfig(currentSiteConfig);
+    if (messages && messages.length > 0) {
+      console.log(`[RTool] Config extraction successful: ${messages.length} messages`);
+      return messages;
+    } else {
+      console.log('[RTool] Config extraction failed, using fallback');
+    }
   }
-  
+
   // Fallback to legacy extraction
-  return extractConversationMessagesLegacy();
+  const legacyMessages = extractConversationMessagesLegacy();
+  console.log(`[RTool] Legacy extraction: ${legacyMessages.length} messages`);
+  return legacyMessages;
 }
 
 // Legacy extraction function (kept as fallback)
