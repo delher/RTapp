@@ -9,6 +9,8 @@ let lastPrompt = null;
 let lastResponse = null;
 let windowIndex = null;
 let isMonitoring = false;
+let responseDebounceTimer = null;
+let pendingResponse = null;
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -241,19 +243,31 @@ function startConversationMonitoring() {
       if (latest.role === 'user' && latest.content !== lastPrompt) {
         lastPrompt = latest.content;
         console.log('[RTool] Detected manual prompt:', lastPrompt);
+        // Reset response state for new prompt
+        lastResponse = null;
+        pendingResponse = null;
       } else if (latest.role === 'assistant' && latest.content !== lastResponse) {
-        lastResponse = latest.content;
-        console.log('[RTool] Detected response:', lastResponse.substring(0, 100) + '...');
+        // Response is updating (streaming)
+        pendingResponse = latest.content;
         
-        // Send to background for logging
-        if (lastPrompt) {
-          chrome.runtime.sendMessage({
-            action: 'logConversation',
-            windowIndex: windowIndex,
-            prompt: lastPrompt,
-            response: lastResponse,
-            timestamp: new Date().toISOString()
-          });
+        // Clear existing timer
+        if (responseDebounceTimer) {
+          clearTimeout(responseDebounceTimer);
+        }
+        
+        // Check if response is complete
+        const isComplete = isResponseComplete();
+        
+        if (isComplete) {
+          // Log immediately if we detect completion
+          console.log('[RTool] Response complete (detected completion indicator)');
+          logCompletedResponse(pendingResponse);
+        } else {
+          // Wait for streaming to stop (debounce)
+          responseDebounceTimer = setTimeout(() => {
+            console.log('[RTool] Response complete (no changes for 3s)');
+            logCompletedResponse(pendingResponse);
+          }, 3000); // Wait 3 seconds after last change
         }
       }
     }
@@ -263,10 +277,62 @@ function startConversationMonitoring() {
   console.log('[RTool] Conversation monitoring started');
 }
 
+// Check if response streaming is complete
+function isResponseComplete() {
+  // ChatGPT: Look for "Stop generating" button (present while streaming)
+  const stopButton = document.querySelector('button[aria-label*="Stop" i]');
+  if (stopButton) {
+    return false; // Still streaming
+  }
+  
+  // ChatGPT: Look for regenerate button (appears when done)
+  const regenerateButton = document.querySelector('button[aria-label*="Regenerate" i]');
+  if (regenerateButton) {
+    return true; // Complete
+  }
+  
+  // Look for other streaming indicators
+  const streamingIndicators = document.querySelectorAll('[class*="streaming"], [class*="generating"]');
+  if (streamingIndicators.length > 0) {
+    return false; // Still streaming
+  }
+  
+  // Default: assume incomplete (will rely on debounce)
+  return false;
+}
+
+// Log the completed response
+function logCompletedResponse(responseText) {
+  if (lastResponse === responseText) {
+    // Already logged this response
+    return;
+  }
+  
+  lastResponse = responseText;
+  pendingResponse = null;
+  
+  console.log('[RTool] Logging response:', responseText.substring(0, 100) + '...');
+  
+  // Send to background for logging
+  if (lastPrompt) {
+    chrome.runtime.sendMessage({
+      action: 'logConversation',
+      windowIndex: windowIndex,
+      prompt: lastPrompt,
+      response: lastResponse,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
 function stopConversationMonitoring() {
   if (conversationObserver) {
     conversationObserver.disconnect();
     conversationObserver = null;
+  }
+  if (responseDebounceTimer) {
+    clearTimeout(responseDebounceTimer);
+    responseDebounceTimer = null;
   }
   isMonitoring = false;
   console.log('[RTool] Conversation monitoring stopped');
