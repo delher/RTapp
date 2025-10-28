@@ -100,6 +100,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true });
     return true;
   }
+
+  // Handle manual prompt capture from content scripts
+  if (request.action === 'manualPrompt') {
+    console.log('[RTool BG] Received manual prompt:', request);
+    // Forward to popup for CSV logging
+    chrome.runtime.sendMessage({
+      action: 'manualPrompt',
+      windowIndex: request.windowIndex,
+      prompt: request.prompt,
+      timestamp: request.timestamp
+    }).catch(err => console.log('[RTool BG] Popup not open, manual prompt not forwarded'));
+    sendResponse({ success: true });
+    return true;
+  }
   
   // Initialize windows from storage before processing any request
   initializeWindows().then(() => {

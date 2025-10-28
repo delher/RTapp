@@ -29,6 +29,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     addLogEntry(request.windowIndex, request.prompt, request.response, request.timestamp);
     sendResponse({ success: true });
+  } else if (request.action === 'manualPrompt') {
+    console.log('[RTool Popup] Processing manualPrompt:', {
+      windowIndex: request.windowIndex,
+      prompt: request.prompt ? request.prompt.substring(0, 30) : 'NULL',
+      timestamp: request.timestamp
+    });
+    // Create a new manual entry with pending response
+    addManualPromptEntry(request.windowIndex, request.prompt, request.timestamp);
+    sendResponse({ success: true });
   } else {
     sendResponse({ success: false, error: 'Unknown action' });
   }
@@ -548,6 +557,44 @@ async function logToCSV(prompt, results) {
     console.log('[RTool] Logged to CSV buffer');
   } catch (error) {
     console.error('[RTool] Failed to log:', error);
+  }
+}
+
+// Add a manual prompt entry (from input monitoring)
+async function addManualPromptEntry(windowIndex, prompt, timestamp) {
+  try {
+    const data = await chrome.storage.local.get('loggingEnabled');
+    if (!data.loggingEnabled) {
+      return;
+    }
+
+    console.log(`[RTool] addManualPromptEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}`);
+
+    // Get current site URL
+    const siteKey = siteSelect.value;
+    const siteConfig = getSiteConfig(siteKey);
+    const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
+
+    // Create new manual entry with pending response
+    sessionLogs.push({
+      timestamp: timestamp || new Date().toISOString(),
+      userId: userId.value.trim() || '(unknown)',
+      url: siteUrl,
+      windowIndex: windowIndex,
+      basePrompt: prompt, // Manual prompt
+      transform: 'none:none', // No transform for manual
+      prompt: prompt, // The actual prompt text
+      response: '(pending)', // Will be updated when response comes
+      success: true
+    });
+
+    console.log(`[RTool] Added manual prompt entry for window ${windowIndex}`);
+
+    // Save to storage
+    await chrome.storage.local.set({ sessionLogs: sessionLogs });
+    updateLoggingStatus(`${sessionLogs.length} entries logged`);
+  } catch (error) {
+    console.error('[RTool] Failed to add manual prompt entry:', error);
   }
 }
 

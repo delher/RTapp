@@ -266,6 +266,9 @@ function startConversationMonitoring() {
   isMonitoring = true;
   console.log('[RTool] Starting conversation monitoring');
 
+  // Also monitor for user input submissions (manual prompts)
+  setupUserInputMonitoring();
+
   // Watch for new messages in the conversation
   const targetNode = document.body;
   const config = { childList: true, subtree: true };
@@ -274,15 +277,15 @@ function startConversationMonitoring() {
     console.log(`[RTool] MutationObserver fired: ${mutations.length} mutations`);
     // Look for new conversation items
     const messages = extractConversationMessages();
-    
+
     if (messages.length === 0) {
       return; // No messages found, skip
     }
-    
+
     const latest = messages[messages.length - 1];
     console.log('[RTool] MutationObserver found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
     console.log('[RTool] Latest content preview:', latest.content.substring(0, 80));
-    
+
     // Check if it's a new prompt or response
     if (latest.role === 'user' && latest.content !== lastPrompt) {
       lastPrompt = latest.content;
@@ -345,9 +348,124 @@ function startConversationMonitoring() {
       }
     }
   });
-  
+
   conversationObserver.observe(targetNode, config);
   console.log('[RTool] Conversation monitoring started');
+}
+
+// Monitor user input submissions (for manual prompts not detected by DOM)
+function setupUserInputMonitoring() {
+  console.log('[RTool] Setting up user input monitoring');
+
+  // Find common input elements
+  const inputSelectors = [
+    'textarea',
+    'input[type="text"]',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+    '.ql-editor',  // Quill editor
+    '.ProseMirror'  // ProseMirror editor
+  ];
+
+  const inputElements = [];
+  inputSelectors.forEach(selector => {
+    const elements = document.querySelectorAll(selector);
+    elements.forEach(el => {
+      if (!inputElements.includes(el)) {
+        inputElements.push(el);
+      }
+    });
+  });
+
+  console.log(`[RTool] Found ${inputElements.length} potential input elements`);
+
+  inputElements.forEach((input, index) => {
+    console.log(`[RTool] Monitoring input ${index}:`, input.tagName, input.className);
+
+    // Monitor for Enter key presses
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        console.log('[RTool] Enter key detected in input');
+        const inputText = getInputText(input);
+        if (inputText && inputText.trim().length > 0) {
+          console.log('[RTool] Captured manual prompt from input:', inputText.substring(0, 50));
+          captureManualPrompt(inputText.trim());
+        }
+      }
+    });
+
+    // Monitor for form submissions
+    const form = input.closest('form');
+    if (form) {
+      form.addEventListener('submit', () => {
+        console.log('[RTool] Form submission detected');
+        const inputText = getInputText(input);
+        if (inputText && inputText.trim().length > 0) {
+          console.log('[RTool] Captured manual prompt from form:', inputText.substring(0, 50));
+          captureManualPrompt(inputText.trim());
+        }
+      });
+    }
+
+    // Monitor for send button clicks near the input
+    const sendButtons = input.parentElement?.querySelectorAll('button') || [];
+    sendButtons.forEach(button => {
+      if (button.textContent?.toLowerCase().includes('send') ||
+          button.getAttribute('aria-label')?.toLowerCase().includes('send') ||
+          button.querySelector('[d*="send"]')) {
+        button.addEventListener('click', () => {
+          console.log('[RTool] Send button clicked');
+          const inputText = getInputText(input);
+          if (inputText && inputText.trim().length > 0) {
+            console.log('[RTool] Captured manual prompt from send button:', inputText.substring(0, 50));
+            captureManualPrompt(inputText.trim());
+          }
+        });
+      }
+    });
+  });
+}
+
+// Get text content from various input types
+function getInputText(input) {
+  if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+    return input.value;
+  } else if (input.getAttribute('contenteditable') === 'true') {
+    return input.textContent || input.innerText;
+  } else if (input.classList.contains('ql-editor') || input.classList.contains('ProseMirror')) {
+    return input.textContent || input.innerText;
+  }
+  return input.value || input.textContent || input.innerText;
+}
+
+// Capture a manual prompt for logging
+function captureManualPrompt(promptText) {
+  if (promptText === lastPrompt) {
+    console.log('[RTool] Manual prompt unchanged, skipping');
+    return;
+  }
+
+  lastPrompt = promptText;
+  console.log('[RTool] ✓ Captured manual prompt:', promptText.substring(0, 100));
+
+  // Reset response state for new prompt
+  lastResponse = null;
+  pendingResponse = null;
+  isLoggingResponse = false;
+  lastResponseTime = 0;
+
+  if (responseDebounceTimer) {
+    clearTimeout(responseDebounceTimer);
+    responseDebounceTimer = null;
+  }
+
+  // Optionally send to popup for immediate logging
+  chrome.runtime.sendMessage({
+    action: 'manualPrompt',
+    windowIndex: windowIndex,
+    prompt: promptText,
+    timestamp: new Date().toISOString()
+  }).catch(err => console.log('[RTool] Failed to send manual prompt:', err));
 }
 
 // Check if response streaming is complete (config-driven)
