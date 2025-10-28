@@ -28,23 +28,34 @@ const SITE_CONFIGS = {
     detection: {
       // Focus on actual response containers, not thinking sections
       messageSelectors: [
-        // Primary: Look for actual response containers
-        '[class*="response"]',
-        '[data-response-id]',
-        '[class*="message-content"]',
-        // Fallback: General message containers
+        // Primary: Look for all message types
         '[class*="message"]',
-        '[data-message-id]'
+        '[class*="query"]',
+        '[class*="response"]',
+        '[class*="conversation"]',
+        '[data-message-id]',
+        '[data-response-id]',
+        '[data-query-id]',
+        // Specific Gemini elements
+        'message-content',
+        '.message',
+        '.query',
+        '.response'
       ],
       containerSelectors: [
         '[class*="conversation"]',
         '[class*="chat-history"]',
+        '[class*="chat"]',
+        '[class*="thread"]',
         'main',
-        '[role="main"]'
+        '[role="main"]',
+        '.conversation',
+        '.chat-history',
+        'chat-window'
       ],
       roleIndicators: {
-        user: ['user', 'query', 'human', 'you'],
-        assistant: ['model', 'assistant', 'bot', 'response', 'gemini', 'ai']
+        user: ['user', 'query', 'human', 'you', 'prompt', 'input', 'message-user', 'user-message'],
+        assistant: ['model', 'assistant', 'bot', 'response', 'gemini', 'ai', 'assistant-message', 'model-response']
       },
 
       // Completion detection
