@@ -18,6 +18,12 @@
   "action": {
     "default_title": "RTool - Click to open control panel"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["site-configs.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   }

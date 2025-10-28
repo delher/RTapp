@@ -104,7 +104,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Initialize windows from storage before processing any request
   initializeWindows().then(() => {
     if (request.action === 'openWindows') {
-      handleOpenWindows(request.count, request.url).then(sendResponse);
+      handleOpenWindows(request.count, request.url, request.siteKey).then(sendResponse);
     }
     else if (request.action === 'closeWindows') {
       handleCloseWindows().then(sendResponse);
@@ -132,7 +132,8 @@ async function handleStartMonitoring() {
       try {
         await chrome.tabs.sendMessage(win.tabId, {
           action: 'startMonitoring',
-          windowIndex: win.index
+          windowIndex: win.index,
+          siteKey: win.siteKey
         });
       } catch (error) {
         console.error(`[RTool BG] Failed to start monitoring on window ${win.index}:`, error);
@@ -171,7 +172,7 @@ function waitForTabLoad(tabId) {
 }
 
 // Open multiple popup windows
-async function handleOpenWindows(count, url) {
+async function handleOpenWindows(count, url, siteKey) {
   try {
     // Validate URL
     const validation = validateUrl(url);
@@ -180,7 +181,7 @@ async function handleOpenWindows(count, url) {
     }
     
     const validUrl = validation.url;
-    console.log(`Opening ${count} windows for ${validUrl}`);
+    console.log(`Opening ${count} windows for ${validUrl} (site: ${siteKey})`);
     
     // Close existing windows first
     await handleCloseWindows();
@@ -215,6 +216,7 @@ async function handleOpenWindows(count, url) {
           id: window.id,
           tabId: tabId,
           url: validUrl,
+          siteKey: siteKey,
           index: i
         });
         
@@ -250,10 +252,10 @@ async function handleOpenWindows(count, url) {
         } catch (pingError) {
           console.warn(`[RTool BG] Tab ${win.tabId} content script not responding, attempting manual injection...`);
           
-          // Manually inject content script
+          // Manually inject site configs and content script
           await chrome.scripting.executeScript({
             target: { tabId: win.tabId },
-            files: ['content.js']
+            files: ['site-configs.js', 'content.js']
           });
           
           console.log(`[RTool BG] Tab ${win.tabId} content script manually injected`);
@@ -341,7 +343,7 @@ async function handleSendPrompt(prompt, transforms) {
           try {
             await chrome.scripting.executeScript({
               target: { tabId: win.tabId },
-              files: ['content.js']
+              files: ['site-configs.js', 'content.js']
             });
             console.log(`[RTool BG] Re-injected content script into tab ${win.tabId}`);
             
@@ -361,7 +363,8 @@ async function handleSendPrompt(prompt, transforms) {
           action: 'injectPrompt',
           prompt: prompt,
           transform: transform,
-          windowIndex: win.index
+          windowIndex: win.index,
+          siteKey: win.siteKey
         });
         
         results.push({

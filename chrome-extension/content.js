@@ -12,6 +12,8 @@ let isMonitoring = false;
 let responseDebounceTimer = null;
 let pendingResponse = null;
 let isLoggingResponse = false; // Prevent concurrent logging
+let currentSiteKey = null;  // Current site configuration key
+let currentSiteConfig = null;  // Current site configuration object
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -24,11 +26,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'injectPrompt') {
     console.log('[RTool] Received inject prompt request');
     windowIndex = request.windowIndex;
+    if (request.siteKey) {
+      currentSiteKey = request.siteKey;
+      currentSiteConfig = getSiteConfig(currentSiteKey);
+      console.log('[RTool] Using site config:', currentSiteKey, currentSiteConfig?.name);
+    }
     injectPrompt(request.prompt, request.transform).then(sendResponse);
     return true; // Will respond asynchronously
   } else if (request.action === 'startMonitoring') {
     console.log('[RTool] Starting conversation monitoring');
     windowIndex = request.windowIndex;
+    if (request.siteKey) {
+      currentSiteKey = request.siteKey;
+      currentSiteConfig = getSiteConfig(currentSiteKey);
+      console.log('[RTool] Using site config for monitoring:', currentSiteKey, currentSiteConfig?.name);
+    }
     startConversationMonitoring();
     sendResponse({ success: true });
   } else if (request.action === 'stopMonitoring') {

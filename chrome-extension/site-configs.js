@@ -1,0 +1,147 @@
+// Site-specific configurations for different AI chat platforms
+// Each config defines how to detect and extract messages for logging
+
+const SITE_CONFIGS = {
+  'chatgpt': {
+    name: 'ChatGPT',
+    url: 'https://chatgpt.com/',
+    detection: {
+      // Primary detection method
+      messageSelector: '[data-message-author-role]',
+      roleAttribute: 'data-message-author-role',
+      contentSelectors: ['.markdown', '[class*="text"]'],
+      
+      // Completion detection
+      stopButton: 'button[aria-label*="Stop" i]',
+      regenerateButton: 'button[aria-label*="Regenerate" i]',
+      streamingClasses: ['streaming', 'generating']
+    },
+    filtering: {
+      // No special filtering needed for ChatGPT
+      skipPatterns: []
+    }
+  },
+  
+  'gemini': {
+    name: 'Gemini',
+    url: 'https://gemini.google.com/',
+    detection: {
+      // Multiple detection strategies
+      messageSelectors: [
+        '[class*="message-content"]',
+        '[class*="query-"]',
+        '[class*="response-"]',
+        'message-content'
+      ],
+      containerSelectors: [
+        '[class*="conversation"]',
+        '[class*="chat-history"]',
+        'chat-window',
+        'main'
+      ],
+      roleIndicators: {
+        user: ['user', 'query'],
+        assistant: ['model', 'assistant', 'bot', 'response']
+      },
+      
+      // Completion detection
+      streamingClasses: ['streaming', 'generating'],
+      completionButtons: [
+        'button[aria-label*="Copy" i]',
+        'button[title*="Copy" i]',
+        'button[aria-label*="Share" i]'
+      ]
+    },
+    filtering: {
+      // Filter out Gemini's thinking sections
+      skipPatterns: [
+        { type: 'class', values: ['thinking', 'reasoning'] },
+        { type: 'aria-label', values: ['thinking', 'show thinking'] },
+        { 
+          type: 'content',
+          maxLength: 100,
+          keywords: [
+            'thinking', 'reasoning', 'analyzing', 'interpreting', 
+            'pinpointing', 'considering', 'evaluating', 'examining', 
+            'assessing', 'sources'
+          ]
+        }
+      ],
+      skipSelectors: [
+        '[aria-label*="thinking"]',
+        '[class*="thinking"]'
+      ]
+    }
+  },
+  
+  'claude': {
+    name: 'Claude',
+    url: 'https://claude.ai/',
+    detection: {
+      // Claude uses a clean message structure
+      messageSelector: '[data-test-id*="message"], [class*="Message"]',
+      roleIndicators: {
+        user: ['user', 'human'],
+        assistant: ['assistant', 'claude', 'bot']
+      },
+      contentSelectors: ['.prose', '[class*="content"]', 'p'],
+      
+      // Completion detection
+      stopButton: 'button[aria-label*="Stop" i]',
+      streamingClasses: ['streaming', 'typing']
+    },
+    filtering: {
+      // Claude doesn't have thinking sections in the same way
+      skipPatterns: []
+    }
+  },
+  
+  'grok': {
+    name: 'Grok',
+    url: 'https://grok.x.com/',
+    detection: {
+      // Grok (X.AI) detection
+      messageSelector: '[data-testid*="message"], [class*="message"]',
+      roleIndicators: {
+        user: ['user', 'human'],
+        assistant: ['assistant', 'grok', 'ai']
+      },
+      contentSelectors: ['.message-content', '[class*="text"]'],
+      
+      // Completion detection
+      stopButton: 'button[aria-label*="Stop" i]',
+      streamingClasses: ['streaming', 'generating']
+    },
+    filtering: {
+      skipPatterns: []
+    }
+  }
+};
+
+// Get config for a given site key
+function getSiteConfig(siteKey) {
+  return SITE_CONFIGS[siteKey] || null;
+}
+
+// Get site key from URL
+function getSiteKeyFromUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase();
+    
+    if (hostname.includes('chatgpt.com')) return 'chatgpt';
+    if (hostname.includes('gemini.google.com')) return 'gemini';
+    if (hostname.includes('claude.ai')) return 'claude';
+    if (hostname.includes('grok.x.com') || hostname.includes('x.com/i/grok')) return 'grok';
+    
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Export for use in other scripts
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { SITE_CONFIGS, getSiteConfig, getSiteKeyFromUrl };
+}
+

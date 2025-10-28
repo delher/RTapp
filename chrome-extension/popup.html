@@ -28,8 +28,13 @@
       <option value="4">4</option>
     </select>
 
-    <label>Site URL:</label>
-    <input type="url" id="siteUrl" placeholder="https://chatgpt.com" value="https://chatgpt.com" />
+    <label>Target Site:</label>
+    <select id="siteSelect">
+      <option value="chatgpt">ChatGPT (chatgpt.com)</option>
+      <option value="gemini">Gemini (gemini.google.com)</option>
+      <option value="claude">Claude (claude.ai)</option>
+      <option value="grok">Grok (grok.x.com)</option>
+    </select>
     
     <div class="button-row">
       <button id="openBtn" class="primary">Open Windows</button>
@@ -70,6 +75,7 @@
 
   <div class="status" id="status"></div>
 
+  <script src="site-configs.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

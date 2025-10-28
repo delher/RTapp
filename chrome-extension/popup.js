@@ -2,7 +2,7 @@
 
 const userId = document.getElementById('userId');
 const instanceCount = document.getElementById('instanceCount');
-const siteUrl = document.getElementById('siteUrl');
+const siteSelect = document.getElementById('siteSelect');
 const openBtn = document.getElementById('openBtn');
 const closeBtn = document.getElementById('closeBtn');
 const promptInput = document.getElementById('promptInput');
@@ -232,21 +232,25 @@ function updateLoggingStatus(message) {
 // Open windows
 openBtn.addEventListener('click', async () => {
   const count = parseInt(instanceCount.value);
-  const url = siteUrl.value.trim();
+  const siteKey = siteSelect.value;
+  const siteConfig = getSiteConfig(siteKey);
   
-  if (!url) {
-    updateStatus('Please enter a URL', 'error');
+  if (!siteConfig) {
+    updateStatus('Invalid site selection', 'error');
     return;
   }
   
-  updateStatus('Opening windows...', 'normal');
+  const url = siteConfig.url;
+  
+  updateStatus(`Opening ${siteConfig.name} windows...`, 'normal');
   openBtn.disabled = true;
   
   try {
     const response = await chrome.runtime.sendMessage({
       action: 'openWindows',
       count: count,
-      url: url
+      url: url,
+      siteKey: siteKey  // Pass site key for content script config
     });
     
     console.log('[RTool Popup] Open windows response:', response);
