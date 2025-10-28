@@ -5,105 +5,138 @@ function extractConversationMessagesWithConfig(siteConfig) {
     console.warn('[RTool] No site config available, using fallback extraction');
     return extractConversationMessagesFallback();
   }
-  
+
   const messages = [];
   const detection = siteConfig.detection;
   const filtering = siteConfig.filtering;
-  
+
   console.log(`[RTool] Using ${siteConfig.name} config for message extraction`);
-  
-  // Try primary message selector (e.g., ChatGPT, Claude)
-  if (detection.messageSelector) {
-    const messageElements = document.querySelectorAll(detection.messageSelector);
-    if (messageElements.length > 0) {
-      console.log(`[RTool] Found ${messageElements.length} messages using primary selector`);
-      
-      messageElements.forEach(msg => {
-        // Get role
-        let role = null;
-        if (detection.roleAttribute) {
-          role = msg.getAttribute(detection.roleAttribute);
-        } else if (detection.roleIndicators) {
-          role = detectRole(msg, detection.roleIndicators);
-        }
-        
-        // Get content
-        const content = extractContent(msg, detection.contentSelectors);
-        
-        if (content && content.trim() && !shouldSkipMessage(msg, content, filtering)) {
-          messages.push({ role: role || 'assistant', content: content.trim() });
-        }
-      });
-      
-      if (messages.length > 0) {
-        console.log(`[RTool] Extracted ${messages.length} messages`);
-        return messages;
-      }
-    }
-  }
-  
-  // Try message selectors array (e.g., Gemini Strategy 1)
+
+  // DEBUG: Log what we're looking for
+  console.log(`[RTool] Message selectors:`, detection.messageSelectors);
+  console.log(`[RTool] Container selectors:`, detection.containerSelectors);
+
+  // Try message selectors array first (primary for Gemini)
   if (detection.messageSelectors && Array.isArray(detection.messageSelectors)) {
     const selector = detection.messageSelectors.join(', ');
+    console.log(`[RTool] Trying message selector: ${selector}`);
+
     const messageElements = document.querySelectorAll(selector);
-    
+    console.log(`[RTool] Found ${messageElements.length} elements with message selectors`);
+
     if (messageElements.length > 0) {
-      console.log(`[RTool] Found ${messageElements.length} messages using selectors array`);
-      
-      messageElements.forEach(msg => {
+      messageElements.forEach((msg, index) => {
+        console.log(`[RTool] Element ${index}:`, msg.tagName, msg.className, msg.getAttribute('data-message-id'));
+
         const content = msg.innerText?.trim();
-        if (!content || content.length < 5) return;
-        
-        if (shouldSkipMessage(msg, content, filtering)) return;
-        
+        console.log(`[RTool] Content length: ${content?.length}, preview: "${content?.substring(0, 50)}"`);
+
+        if (!content || content.length < 5) {
+          console.log(`[RTool] Skipping: too short or empty`);
+          return;
+        }
+
+        if (shouldSkipMessage(msg, content, filtering)) {
+          console.log(`[RTool] Skipping: filtered out`);
+          return;
+        }
+
         const role = detectRole(msg, detection.roleIndicators);
-        messages.push({ role: role || 'assistant', content });
+        console.log(`[RTool] Detected role: ${role}`);
+
+        if (role) {
+          messages.push({ role, content });
+          console.log(`[RTool] Added message: ${role} (${content.length} chars)`);
+        } else {
+          console.log(`[RTool] No role detected, skipping`);
+        }
       });
-      
+
       if (messages.length > 0) {
-        console.log(`[RTool] Extracted ${messages.length} messages`);
+        console.log(`[RTool] Extracted ${messages.length} messages from selectors`);
         return messages;
       }
     }
   }
-  
-  // Try container-based detection (e.g., Gemini Strategy 2)
+
+  // Try container-based detection (fallback for Gemini)
   if (detection.containerSelectors) {
-    const selector = Array.isArray(detection.containerSelectors) 
+    const selector = Array.isArray(detection.containerSelectors)
       ? detection.containerSelectors.join(', ')
       : detection.containerSelectors;
+    console.log(`[RTool] Trying container selector: ${selector}`);
+
     const container = document.querySelector(selector);
-    
+    console.log(`[RTool] Found container:`, container ? container.tagName : 'none');
+
     if (container) {
-      console.log(`[RTool] Found container:`, container.tagName);
-      
       const allDivs = Array.from(container.querySelectorAll('div'));
+      console.log(`[RTool] Container has ${allDivs.length} divs total`);
+
       const messageDivs = allDivs.filter(div => {
         const text = div.innerText?.trim();
-        return text && text.length > 20 && text.length < 10000 && div.children.length > 0;
+        const hasText = text && text.length > 20 && text.length < 10000;
+        const hasChildren = div.children.length > 0;
+        return hasText && hasChildren;
       });
-      
+
       console.log(`[RTool] Found ${messageDivs.length} potential message divs`);
-      
-      messageDivs.forEach(msg => {
+
+      messageDivs.forEach((msg, index) => {
+        console.log(`[RTool] Checking div ${index}:`, msg.className, `(${msg.innerText?.length} chars)`);
+
         const content = msg.innerText?.trim();
         if (!content || content.length < 5) return;
-        
-        if (shouldSkipMessage(msg, content, filtering)) return;
-        
+
+        if (shouldSkipMessage(msg, content, filtering)) {
+          console.log(`[RTool] Container div ${index}: filtered out`);
+          return;
+        }
+
         const role = detectRole(msg, detection.roleIndicators);
+        console.log(`[RTool] Container div ${index}: role=${role}`);
+
         if (role) {
           messages.push({ role, content });
+          console.log(`[RTool] Container: Added message ${role} (${content.length} chars)`);
         }
       });
-      
+
       if (messages.length > 0) {
         console.log(`[RTool] Extracted ${messages.length} messages from container`);
         return messages;
       }
     }
   }
-  
+
+  // Try primary message selector (legacy)
+  if (detection.messageSelector) {
+    const messageElements = document.querySelectorAll(detection.messageSelector);
+    if (messageElements.length > 0) {
+      console.log(`[RTool] Found ${messageElements.length} messages using primary selector`);
+
+      messageElements.forEach(msg => {
+        let role = null;
+        if (detection.roleAttribute) {
+          role = msg.getAttribute(detection.roleAttribute);
+        } else if (detection.roleIndicators) {
+          role = detectRole(msg, detection.roleIndicators);
+        }
+
+        const content = extractContent(msg, detection.contentSelectors);
+
+        if (content && content.trim() && !shouldSkipMessage(msg, content, filtering)) {
+          messages.push({ role: role || 'assistant', content: content.trim() });
+        }
+      });
+
+      if (messages.length > 0) {
+        console.log(`[RTool] Extracted ${messages.length} messages using primary selector`);
+        return messages;
+      }
+    }
+  }
+
   // Fallback to generic detection
   console.warn(`[RTool] ${siteConfig.name} config extraction failed, using fallback`);
   return extractConversationMessagesFallback();
