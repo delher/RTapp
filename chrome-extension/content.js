@@ -12,6 +12,7 @@ let isMonitoring = false;
 let responseDebounceTimer = null;
 let pendingResponse = null;
 let isLoggingResponse = false; // Prevent concurrent logging
+let lastResponseTime = 0; // Track when response was last updated
 let currentSiteKey = null;  // Current site configuration key
 let currentSiteConfig = null;  // Current site configuration object
 
@@ -272,6 +273,7 @@ function startConversationMonitoring() {
       lastResponse = null;
       pendingResponse = null;
       isLoggingResponse = false;
+      lastResponseTime = 0; // Reset response timing
       if (responseDebounceTimer) {
         clearTimeout(responseDebounceTimer);
         responseDebounceTimer = null;
@@ -283,38 +285,47 @@ function startConversationMonitoring() {
         console.log('[RTool] Skipping: already logging');
         return;
       }
-      
+
       // Skip if content hasn't changed
       if (latest.content === lastResponse || latest.content === pendingResponse) {
         console.log('[RTool] Skipping: content unchanged');
         return;
       }
-      
-      console.log('[RTool] ✓ Detected assistant response update');
-      
+
+      const currentTime = Date.now();
+      console.log('[RTool] ✓ Detected assistant response update at', currentTime);
+
       // Response is updating (streaming)
       pendingResponse = latest.content;
-      
+      lastResponseTime = currentTime;
+
       // Clear existing timer
       if (responseDebounceTimer) {
         clearTimeout(responseDebounceTimer);
       }
-      
+
       // Check if response is complete
       const isComplete = isResponseComplete();
-      
+
       if (isComplete) {
         // Log immediately if we detect completion
         console.log('[RTool] Response complete (detected completion indicator)');
         logCompletedResponse(pendingResponse);
       } else {
-        // Wait for streaming to stop (debounce)
+        // Wait longer for Gemini responses - they can be quite long
+        const debounceTime = currentSiteKey === 'gemini' ? 8000 : 5000;
         responseDebounceTimer = setTimeout(() => {
           if (pendingResponse && !isLoggingResponse) {
-            console.log('[RTool] Response complete (no changes for 5s)');
-            logCompletedResponse(pendingResponse);
+            // Double-check that no updates happened in the last 2 seconds
+            const timeSinceLastUpdate = Date.now() - lastResponseTime;
+            if (timeSinceLastUpdate >= 2000) {
+              console.log(`[RTool] Response complete (no changes for ${debounceTime/1000}s, stable for ${timeSinceLastUpdate/1000}s)`);
+              logCompletedResponse(pendingResponse);
+            } else {
+              console.log(`[RTool] Response still updating (${timeSinceLastUpdate/1000}s since last change), waiting longer`);
+            }
           }
-        }, 5000); // Wait 5 seconds after last change
+        }, debounceTime);
       }
     }
   });
@@ -415,6 +426,15 @@ function logCompletedResponse(responseText) {
   if (!lastPrompt) {
     console.log('[RTool] No lastPrompt set, cannot log response');
     return;
+  }
+
+  // For Gemini, add extra delay to ensure response is truly complete
+  if (currentSiteKey === 'gemini') {
+    const timeSinceResponseStart = lastResponseTime > 0 ? Date.now() - lastResponseTime : 0;
+    if (timeSinceResponseStart < 3000) { // Response must have been streaming for at least 3 seconds
+      console.log(`[RTool] Gemini response too new (${timeSinceResponseStart/1000}s), waiting longer`);
+      return;
+    }
   }
 
   isLoggingResponse = true;
