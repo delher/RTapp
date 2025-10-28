@@ -375,38 +375,93 @@ function stopConversationMonitoring() {
   console.log('[RTool] Conversation monitoring stopped');
 }
 
-// Extract messages from the page (ChatGPT/ChatKit format)
+// Extract messages from the page (ChatGPT/Gemini/ChatKit format)
 function extractConversationMessages() {
   const messages = [];
   
-  // Try ChatGPT format
+  // Try ChatGPT format (data-message-author-role attribute)
   const chatGptMessages = document.querySelectorAll('[data-message-author-role]');
-  chatGptMessages.forEach(msg => {
-    const role = msg.getAttribute('data-message-author-role');
-    const content = msg.querySelector('.markdown')?.innerText || 
-                   msg.querySelector('[class*="text"]')?.innerText ||
-                   msg.innerText;
-    if (content && content.trim()) {
-      messages.push({ role, content: content.trim() });
-    }
-  });
-  
-  // Try generic format (look for user/assistant patterns)
-  if (messages.length === 0) {
-    const allMessages = document.querySelectorAll('[class*="message"], [class*="chat"]');
-    allMessages.forEach(msg => {
-      const text = msg.innerText.trim();
-      if (text.length > 10) { // Avoid empty/short elements
-        // Heuristic: detect role based on styling or position
-        const isUser = msg.querySelector('[class*="user"]') || 
-                      msg.classList.contains('user');
-        messages.push({ 
-          role: isUser ? 'user' : 'assistant', 
-          content: text 
-        });
+  if (chatGptMessages.length > 0) {
+    chatGptMessages.forEach(msg => {
+      const role = msg.getAttribute('data-message-author-role');
+      const content = msg.querySelector('.markdown')?.innerText || 
+                     msg.querySelector('[class*="text"]')?.innerText ||
+                     msg.innerText;
+      if (content && content.trim()) {
+        messages.push({ role, content: content.trim() });
       }
     });
+    return messages;
   }
+  
+  // Try Gemini format (model-response and user-query containers)
+  const geminiContainer = document.querySelector('[class*="conversation"], [class*="chat-history"], main');
+  if (geminiContainer) {
+    // Look for messages with role indicators
+    const potentialMessages = geminiContainer.querySelectorAll('[class*="message"], [class*="turn"], [data-test-id]');
+    potentialMessages.forEach(msg => {
+      const classList = msg.className.toLowerCase();
+      const text = msg.innerText?.trim();
+      
+      if (!text || text.length < 5) return; // Skip empty/tiny elements
+      
+      // Detect role from class names or data attributes
+      let role = null;
+      if (classList.includes('user') || msg.getAttribute('data-test-id')?.includes('user')) {
+        role = 'user';
+      } else if (classList.includes('model') || classList.includes('assistant') || 
+                 classList.includes('bot') || classList.includes('ai') ||
+                 msg.getAttribute('data-test-id')?.includes('model')) {
+        role = 'assistant';
+      }
+      
+      if (role && text) {
+        messages.push({ role, content: text });
+      }
+    });
+    
+    if (messages.length > 0) return messages;
+  }
+  
+  // Generic fallback: Look for conversation structure
+  // Find the main content area (avoid headers, sidebars, etc.)
+  const mainContent = document.querySelector('main, [role="main"], #main, .main-content') || document.body;
+  
+  // Get all potential message containers
+  const potentialMessages = Array.from(mainContent.querySelectorAll('[class*="message"], [class*="chat"], [class*="response"], [class*="prompt"]'));
+  
+  // Filter to direct children of conversation containers
+  const conversationContainers = mainContent.querySelectorAll('[class*="conversation"], [class*="chat"], [class*="thread"], [class*="messages"]');
+  let messageElements = [];
+  
+  if (conversationContainers.length > 0) {
+    conversationContainers.forEach(container => {
+      const children = Array.from(container.children);
+      messageElements = messageElements.concat(children.filter(el => {
+        const text = el.innerText?.trim();
+        return text && text.length > 10;
+      }));
+    });
+  } else {
+    messageElements = potentialMessages;
+  }
+  
+  // Analyze message elements
+  messageElements.forEach((msg, index) => {
+    const text = msg.innerText?.trim();
+    if (!text || text.length < 10) return;
+    
+    // Try to determine role
+    const classList = msg.className.toLowerCase();
+    const isUser = classList.includes('user') || 
+                   msg.querySelector('[class*="user"]') ||
+                   (index % 2 === 0); // Fallback: assume alternating user/assistant
+    
+    messages.push({
+      role: isUser ? 'user' : 'assistant',
+      content: text
+    });
+  });
   
   return messages;
 }
