@@ -63,7 +63,7 @@ const SITE_CONFIGS = {
     },
     filtering: {
       // Minimum response length to log (filters out streaming status messages)
-      minResponseLength: 50,  // Responses must be at least 50 chars
+      minResponseLength: 10,  // Responses must be at least 10 chars
       
       // Filter out Gemini's thinking sections and streaming status messages
       skipPatterns: [
