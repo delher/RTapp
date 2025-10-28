@@ -237,13 +237,18 @@ function startConversationMonitoring() {
   conversationObserver = new MutationObserver((mutations) => {
     // Look for new conversation items
     const messages = extractConversationMessages();
-    if (messages.length > 0) {
-      const latest = messages[messages.length - 1];
+    
+    if (messages.length === 0) {
+      return; // No messages found, skip
+    }
+    
+    const latest = messages[messages.length - 1];
+    console.log('[RTool] MutationObserver found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
       
       // Check if it's a new prompt or response
       if (latest.role === 'user' && latest.content !== lastPrompt) {
         lastPrompt = latest.content;
-        console.log('[RTool] Detected manual prompt:', lastPrompt);
+        console.log('[RTool] Detected manual prompt:', lastPrompt.substring(0, 100));
         // Reset response state for new prompt
         lastResponse = null;
         pendingResponse = null;
@@ -300,22 +305,33 @@ function isResponseComplete() {
   // ChatGPT: Look for "Stop generating" button (present while streaming)
   const stopButton = document.querySelector('button[aria-label*="Stop" i]');
   if (stopButton) {
+    console.log('[RTool] Response incomplete: Stop button found');
     return false; // Still streaming
   }
   
   // ChatGPT: Look for regenerate button (appears when done)
   const regenerateButton = document.querySelector('button[aria-label*="Regenerate" i]');
   if (regenerateButton) {
+    console.log('[RTool] Response complete: Regenerate button found');
     return true; // Complete
   }
   
-  // Look for other streaming indicators
+  // Gemini: Look for streaming classes
   const streamingIndicators = document.querySelectorAll('[class*="streaming"], [class*="generating"]');
   if (streamingIndicators.length > 0) {
+    console.log('[RTool] Response incomplete:', streamingIndicators.length, 'streaming indicators');
     return false; // Still streaming
   }
   
+  // Gemini: Look for action buttons that appear when done
+  const actionButtons = document.querySelectorAll('button[aria-label*="Copy" i], button[title*="Copy" i], button[aria-label*="Share" i]');
+  if (actionButtons.length > 0) {
+    console.log('[RTool] Response complete: Found', actionButtons.length, 'action buttons (Gemini)');
+    return true; // Complete
+  }
+  
   // Default: assume incomplete (will rely on debounce)
+  console.log('[RTool] Response status unknown, relying on debounce');
   return false;
 }
 
@@ -382,6 +398,7 @@ function extractConversationMessages() {
   // Try ChatGPT format (data-message-author-role attribute)
   const chatGptMessages = document.querySelectorAll('[data-message-author-role]');
   if (chatGptMessages.length > 0) {
+    console.log('[RTool] Using ChatGPT format, found', chatGptMessages.length, 'messages');
     chatGptMessages.forEach(msg => {
       const role = msg.getAttribute('data-message-author-role');
       const content = msg.querySelector('.markdown')?.innerText || 
@@ -394,33 +411,86 @@ function extractConversationMessages() {
     return messages;
   }
   
-  // Try Gemini format (model-response and user-query containers)
-  const geminiContainer = document.querySelector('[class*="conversation"], [class*="chat-history"], main');
+  // Try Gemini format - multiple detection strategies
+  // Strategy 1: Look for message-content divs (common in Gemini)
+  const geminiMessages = document.querySelectorAll('[class*="message-content"], [class*="query-"], [class*="response-"], message-content');
+  if (geminiMessages.length > 0) {
+    console.log('[RTool] Using Gemini message-content format, found', geminiMessages.length, 'messages');
+    geminiMessages.forEach(msg => {
+      const parent = msg.parentElement;
+      const text = msg.innerText?.trim();
+      if (!text || text.length < 5) return;
+      
+      // Check parent or element for role indicators
+      const parentClass = parent?.className?.toLowerCase() || '';
+      const msgClass = msg.className?.toLowerCase() || '';
+      const combined = parentClass + ' ' + msgClass;
+      
+      let role = 'assistant'; // Default to assistant
+      if (combined.includes('user') || combined.includes('query')) {
+        role = 'user';
+      }
+      
+      messages.push({ role, content: text });
+    });
+    
+    if (messages.length > 0) {
+      console.log('[RTool] Extracted', messages.length, 'Gemini messages');
+      return messages;
+    }
+  }
+  
+  // Strategy 2: Look for conversation containers with role indicators
+  const geminiContainer = document.querySelector('[class*="conversation"], [class*="chat-history"], chat-window, main');
   if (geminiContainer) {
-    // Look for messages with role indicators
-    const potentialMessages = geminiContainer.querySelectorAll('[class*="message"], [class*="turn"], [data-test-id]');
-    potentialMessages.forEach(msg => {
-      const classList = msg.className.toLowerCase();
+    console.log('[RTool] Found Gemini container:', geminiContainer.className);
+    
+    // Look for all child divs that might contain messages
+    const allDivs = Array.from(geminiContainer.querySelectorAll('div'));
+    const messageDivs = allDivs.filter(div => {
+      const text = div.innerText?.trim();
+      const hasChildren = div.children.length > 0;
+      // Look for divs with substantial text content
+      return text && text.length > 20 && text.length < 10000 && hasChildren;
+    });
+    
+    console.log('[RTool] Found', messageDivs.length, 'potential message divs in Gemini');
+    
+    messageDivs.forEach(msg => {
+      const classList = msg.className?.toLowerCase() || '';
+      const ariaLabel = msg.getAttribute('aria-label')?.toLowerCase() || '';
       const text = msg.innerText?.trim();
       
-      if (!text || text.length < 5) return; // Skip empty/tiny elements
+      if (!text || text.length < 5) return;
       
-      // Detect role from class names or data attributes
+      // Detect role from multiple signals
       let role = null;
-      if (classList.includes('user') || msg.getAttribute('data-test-id')?.includes('user')) {
+      
+      // Check class names
+      if (classList.includes('user') || classList.includes('query') || ariaLabel.includes('user')) {
         role = 'user';
       } else if (classList.includes('model') || classList.includes('assistant') || 
-                 classList.includes('bot') || classList.includes('ai') ||
-                 msg.getAttribute('data-test-id')?.includes('model')) {
+                 classList.includes('bot') || classList.includes('response') ||
+                 ariaLabel.includes('model') || ariaLabel.includes('assistant')) {
         role = 'assistant';
       }
       
-      if (role && text) {
+      // Check data attributes
+      if (!role) {
+        const dataRole = msg.getAttribute('data-test-id') || msg.getAttribute('data-role') || '';
+        if (dataRole.includes('user')) role = 'user';
+        else if (dataRole.includes('model') || dataRole.includes('assistant')) role = 'assistant';
+      }
+      
+      if (role) {
         messages.push({ role, content: text });
       }
     });
     
-    if (messages.length > 0) return messages;
+    if (messages.length > 0) {
+      console.log('[RTool] Extracted', messages.length, 'messages from Gemini container');
+      return messages;
+    }
   }
   
   // Generic fallback: Look for conversation structure
