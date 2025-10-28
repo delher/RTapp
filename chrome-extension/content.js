@@ -440,12 +440,6 @@ function logCompletedResponse(responseText) {
     return;
   }
 
-  // Skip if we don't have a prompt to match against
-  if (!lastPrompt) {
-    console.log('[RTool] No lastPrompt set, cannot log response');
-    return;
-  }
-
   // For Gemini, add extra delay to ensure response is truly complete
   if (currentSiteKey === 'gemini') {
     const timeSinceResponseStart = lastResponseTime > 0 ? Date.now() - lastResponseTime : 0;
@@ -458,19 +452,30 @@ function logCompletedResponse(responseText) {
   isLoggingResponse = true;
   lastResponse = responseText;
   pendingResponse = null;
-  
+
   console.log('[RTool] Logging response (length:', responseText.length, '):', responseText.substring(0, 100) + '...');
-  console.log('[RTool] lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
-  
+
+  // Try to use lastPrompt if available (for manual interactions)
+  let promptToUse = lastPrompt;
+
+  // If no lastPrompt (manual detection failed), try to find a pending RTOOL entry
+  if (!promptToUse) {
+    console.log('[RTool] No lastPrompt, looking for pending RTOOL entries...');
+    // This will be handled by the background script's addLogEntry function
+    // which can match responses to existing pending entries
+  }
+
+  console.log('[RTool] Using prompt for logging:', promptToUse ? promptToUse.substring(0, 50) : 'NULL (will match pending entries)');
+
   // Send to background for logging
   chrome.runtime.sendMessage({
     action: 'logConversation',
     windowIndex: windowIndex,
-    prompt: lastPrompt,
+    prompt: promptToUse,  // May be null for RTOOL responses
     response: lastResponse,
     timestamp: new Date().toISOString()
   }).then(() => {
-    console.log('[RTool] ✓ Response logged successfully for prompt:', lastPrompt?.substring(0, 30));
+    console.log('[RTool] ✓ Response logged successfully');
     // Reset flag after a delay to allow for next response
     setTimeout(() => {
       isLoggingResponse = false;

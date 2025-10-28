@@ -550,29 +550,43 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
       return;
     }
 
-    // Try to find a pending entry for this window with matching prompt
-    // For manual entries, match against basePrompt (original untransformed prompt)
-    // For AI responses, match against the prompt that was actually sent
-    const windowPendingIndex = sessionLogs.findIndex(
-      log => log.windowIndex === windowIndex &&
-             log.response === '(pending)' &&
-             (log.basePrompt === prompt || log.prompt === prompt)
-    );
+    console.log(`[RTool] addLogEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}, response length=${response?.length}`);
+
+    // Try to find a pending entry for this window
+    let windowPendingIndex = -1;
+
+    if (prompt) {
+      // If we have a prompt, try to match it to existing pending entries
+      windowPendingIndex = sessionLogs.findIndex(
+        log => log.windowIndex === windowIndex &&
+               log.response === '(pending)' &&
+               (log.basePrompt === prompt || log.prompt === prompt)
+      );
+      console.log(`[RTool] Searched for pending entry with prompt, found index: ${windowPendingIndex}`);
+    } else {
+      // If no prompt provided (RTOOL response), find any pending entry for this window
+      windowPendingIndex = sessionLogs.findIndex(
+        log => log.windowIndex === windowIndex && log.response === '(pending)'
+      );
+      console.log(`[RTool] Searched for any pending entry (no prompt), found index: ${windowPendingIndex}`);
+    }
 
     if (windowPendingIndex !== -1) {
       // Update existing window entry with response
       sessionLogs[windowPendingIndex].response = response;
       console.log(`[RTool] Updated window ${windowIndex} log entry with response: ${response.substring(0, 50)}...`);
     } else {
-      // Check if we already have this exact prompt-response pair
-      const existingExactMatch = sessionLogs.findIndex(
+      // No pending entry found - this is a manual interaction with no associated prompt
+      console.log(`[RTool] No pending entry found for window ${windowIndex}, creating new manual entry`);
+
+      // Check if we already have this exact response (avoid duplicates)
+      const existingResponse = sessionLogs.findIndex(
         log => log.windowIndex === windowIndex &&
-               log.prompt === prompt &&
                log.response === response
       );
 
-      if (existingExactMatch !== -1) {
-        console.log(`[RTool] Exact prompt-response match already exists for window ${windowIndex}, skipping duplicate`);
+      if (existingResponse !== -1) {
+        console.log(`[RTool] Response already exists for window ${windowIndex}, skipping duplicate`);
         return;
       }
 
@@ -589,13 +603,13 @@ async function addLogEntry(windowIndex, prompt, response, timestamp) {
         userId: userIdValue,
         url: siteUrl,
         windowIndex: windowIndex,
-        basePrompt: 'Manual Entry', // Manual entries marked as such
+        basePrompt: prompt || 'Manual Entry', // Use prompt if available, otherwise mark as manual
         transform: 'none:none', // Manual entries have no transform
-        prompt: prompt, // Manual entries: just the prompt they typed
+        prompt: prompt || 'Manual Entry', // Use prompt if available
         response: response,
         success: true
       });
-      console.log(`[RTool] Added manual interaction to log for window ${windowIndex}: ${prompt.substring(0, 50)}...`);
+      console.log(`[RTool] Added ${prompt ? 'manual' : 'RTOOL'} interaction to log for window ${windowIndex}`);
     }
     
     // Save to storage

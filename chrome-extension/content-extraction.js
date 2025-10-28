@@ -24,36 +24,45 @@ function extractConversationMessagesWithConfig(siteConfig) {
     const messageElements = document.querySelectorAll(selector);
     console.log(`[RTool] Found ${messageElements.length} elements with message selectors`);
 
+    // DEBUG: Log ALL found elements, even if we don't use them
+    if (messageElements.length > 0) {
+      console.log(`[RTool] ALL found elements:`);
+      messageElements.forEach((msg, index) => {
+        const content = msg.innerText?.trim();
+        const classes = msg.className;
+        const attrs = Array.from(msg.attributes).map(attr => `${attr.name}="${attr.value}"`).join(' ');
+        console.log(`[RTool]   ${index}: ${msg.tagName}.${classes} ${attrs} | Content: "${content?.substring(0, 30)}..."`);
+      });
+    }
+
     if (messageElements.length > 0) {
       messageElements.forEach((msg, index) => {
-        console.log(`[RTool] Element ${index}:`, msg.tagName, msg.className, msg.getAttribute('data-message-id'));
-
         const content = msg.innerText?.trim();
-        console.log(`[RTool] Content length: ${content?.length}, preview: "${content?.substring(0, 50)}"`);
+        console.log(`[RTool] Processing element ${index}: content length ${content?.length}`);
 
         if (!content || content.length < 5) {
-          console.log(`[RTool] Skipping: too short or empty`);
+          console.log(`[RTool] Skipping element ${index}: too short or empty`);
           return;
         }
 
         if (shouldSkipMessage(msg, content, filtering)) {
-          console.log(`[RTool] Skipping: filtered out`);
+          console.log(`[RTool] Skipping element ${index}: filtered out`);
           return;
         }
 
         const role = detectRole(msg, detection.roleIndicators);
-        console.log(`[RTool] Detected role: ${role}`);
+        console.log(`[RTool] Element ${index} detected role: ${role}`);
 
         if (role) {
           messages.push({ role, content });
-          console.log(`[RTool] Added message: ${role} (${content.length} chars)`);
+          console.log(`[RTool] Added message ${index}: ${role} (${content.length} chars)`);
         } else {
-          console.log(`[RTool] No role detected, skipping`);
+          console.log(`[RTool] Element ${index}: no role detected, skipping`);
         }
       });
 
+      console.log(`[RTool] Final messages from selectors: ${messages.length}`);
       if (messages.length > 0) {
-        console.log(`[RTool] Extracted ${messages.length} messages from selectors`);
         return messages;
       }
     }
