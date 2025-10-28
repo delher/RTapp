@@ -304,18 +304,16 @@ function startConversationMonitoring() {
         return;
       }
 
-      // Skip if content hasn't changed
-      if (latest.content === lastResponse || latest.content === pendingResponse) {
-        console.log('[RTool] Skipping: content unchanged');
-        return;
-      }
-
       const currentTime = Date.now();
-      console.log('[RTool] ✓ Detected assistant response update at', currentTime);
 
-      // Response is updating (streaming)
-      pendingResponse = latest.content;
-      lastResponseTime = currentTime;
+      // Always update pending response if content changed
+      if (latest.content !== pendingResponse) {
+        console.log('[RTool] ✓ Detected assistant response update at', currentTime);
+        pendingResponse = latest.content;
+        lastResponseTime = currentTime;
+      } else {
+        console.log('[RTool] Assistant response unchanged, checking completion');
+      }
 
       // Clear existing timer
       if (responseDebounceTimer) {
