@@ -1,6 +1,6 @@
 # RTool Chrome Extension
 
-Multi-window web automation tool with Parseltongue transforms and comprehensive CSV logging.
+Multi-window web automation tool with Parseltongue transforms and  CSV logging.
 
 ## Features
 
