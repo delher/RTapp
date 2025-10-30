@@ -64,16 +64,6 @@ Test how LLMs respond to different text encodings:
 ✅ Uses real Chrome windows
 ⚠️ Requires pop-up permission
 ```
-
-### Electron App
-```
-✅ Best for desktop (Mac/Win/Linux)
-✅ Professional native app
-✅ Unified interface
-✅ Distributable packages
-⚠️ Larger size (~200MB)
-```
-
 ## 📖 Documentation
 
 ### General
@@ -85,10 +75,7 @@ Test how LLMs respond to different text encodings:
 - [chrome-extension/CHROMEOS-INSTALL.md](chrome-extension/CHROMEOS-INSTALL.md) - ChromeOS install guide
 
 ### Electron App
-- [electron-app/README.md](electron-app/README.md) - Full documentation
-- [electron-app/PACKAGING.md](electron-app/PACKAGING.md) - Build & distribution guide
-- [electron-app/SECURITY.md](electron-app/SECURITY.md) - Security documentation
-- [electron-app/CHROMEOS.md](electron-app/CHROMEOS.md) - ChromeOS Linux container install
+- Deprecated due to large size; not suitable for Chromebooks.
 
 ## 🎓 Example Use Case
 
@@ -105,7 +92,7 @@ Test how LLMs respond to different text encodings:
 
 ## 🔒 Security Features
 
-Both versions include:
+Includes:
 
 - ✅ **Content Security Policy** - No eval, no inline scripts
 - ✅ **URL Validation** - Blocks localhost, file://, malicious protocols
@@ -120,18 +107,6 @@ Both versions include:
 cd chrome-extension/
 # Load unpacked in Chrome
 # Edit files, reload extension to test
-```
-
-### Electron App
-```bash
-cd electron-app/
-npm install
-npm start
-
-# Build distributable
-npm run build:mac     # macOS DMG
-npm run build:win     # Windows installer
-npm run build:linux   # Linux AppImage/deb
 ```
 
 ## 🤝 Contributing
@@ -152,12 +127,6 @@ Coordinate features across both versions when possible.
 - Chrome browser (any platform)
 - Developer mode enabled
 - Pop-up permissions
-
-### Electron App
-- **macOS**: 10.13+
-- **Windows**: 10+
-- **Linux**: Ubuntu 18.04+ or equivalent
-- **ChromeOS**: Linux support enabled (Crostini)
 
 ## ⚠️ Legal & Ethical Use
 
@@ -190,32 +159,15 @@ RTapp/
 ├── README.md                    # This file
 ├── VERSIONS.md                  # Version comparison
 ├── chrome-extension/            # Chrome extension version
-│   ├── manifest.json
-│   ├── popup.html
-│   ├── popup.js
-│   ├── background.js
-│   ├── content.js
-│   └── README.md
-└── electron-app/                # Electron desktop app
-    ├── package.json
-    ├── main.js
-    ├── preload.js
-    ├── index.html
-    ├── renderer.js
-    ├── README.md
-    ├── PACKAGING.md
-    └── SECURITY.md
+   ├── manifest.json
+   ├── popup.html
+   ├── popup.js
+   ├── background.js
+   ├── content.js
+   └── README.md
+
 ```
 
-## 🎯 Which Version Should I Use?
-
-**Quick decision:**
-- **Using a Chromebook?** → Chrome Extension
-- **Using macOS/Windows/Linux desktop?** → Electron App
-- **Just want to try it?** → Chrome Extension (easier)
-- **Need professional tool?** → Electron App (better UX)
-
-See [VERSIONS.md](VERSIONS.md) for complete comparison.
 
 ## 📜 License
 
@@ -224,7 +176,6 @@ MIT License - See [LICENSE](LICENSE) file
 ## 🙏 Credits
 
 Built with:
-- [Electron](https://www.electronjs.org/) - Desktop app framework
 - [Chrome Extensions API](https://developer.chrome.com/docs/extensions/) - Browser extension platform
 - [Parseltongue](https://elder-plinius.github.io/P4RS3LT0NGV3/) - Text transformation toolkit inspiration
 
