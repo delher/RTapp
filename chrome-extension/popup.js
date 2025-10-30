@@ -1,4 +1,7 @@
 // Popup UI logic for RTool Chrome Extension
+// VERSION: 1.3.8 - Removed waitingForResponse check from manual prompt detection in content.js
+
+console.log('[RTool Popup] Version 1.3.8 loaded');
 
 const userId = document.getElementById('userId');
 const instanceCount = document.getElementById('instanceCount');
@@ -25,21 +28,73 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       windowIndex: request.windowIndex,
       prompt: request.prompt ? request.prompt.substring(0, 30) : 'NULL',
       responseLength: request.response?.length,
-      timestamp: request.timestamp
+      timestamp: request.timestamp,
+      isAuto: request.isAuto,
+      isManual: request.isManual
     });
-    addLogEntry(request.windowIndex, request.prompt, request.response, request.timestamp);
+    addLogEntry(request.windowIndex, request.prompt, request.response, request.timestamp, {
+      isAuto: request.isAuto === true,
+      isManual: request.isManual === true
+    });
     sendResponse({ success: true });
+    return true;
+  } else if (request.action === 'logConversation') {
+    // Silently acknowledge but don't process - background.js will forward as 'addToLog'
+    // This prevents duplicate logging
+    sendResponse({ success: true });
+    return true;
   } else if (request.action === 'manualPrompt') {
     console.log('[RTool Popup] Processing manualPrompt:', {
       windowIndex: request.windowIndex,
       prompt: request.prompt ? request.prompt.substring(0, 30) : 'NULL',
-      timestamp: request.timestamp
+      isManual: request.isManual,
+      timestamp: request.timestamp,
+      source: request.source || 'unknown',
+      url: request.url || 'unknown',
+      manualOverride: request.manualOverride
     });
+    
+    // Log the current state of the windowPromptMap for this window
+    if (windowPromptMap[request.windowIndex]) {
+      console.log(`[RTool Popup] Current windowPromptMap for window ${request.windowIndex}:`, 
+        JSON.stringify({
+          basePrompt: windowPromptMap[request.windowIndex].basePrompt?.substring(0, 30),
+          isManual: windowPromptMap[request.windowIndex].isManual,
+          isAutoPrompt: windowPromptMap[request.windowIndex].isAutoPrompt
+        })
+      );
+    }
+    
+    // Check if we already have this prompt for this window
+    const existingEntry = sessionLogs.find(log => 
+      log.windowIndex === request.windowIndex && 
+      log.prompt === request.prompt &&
+      log.response === '(pending)'
+    );
+    
+    if (existingEntry) {
+      console.log(`[RTool Popup] Prompt already exists for window ${request.windowIndex}, skipping duplicate`);
+      sendResponse({ success: true, status: 'duplicate' });
+      return true;
+    }
+    
     // Create a new manual entry with pending response
-    addManualPromptEntry(request.windowIndex, request.prompt, request.timestamp);
+    // Pass all available information to ensure proper logging
+    addManualPromptEntry(
+      request.windowIndex, 
+      request.prompt, 
+      request.timestamp, 
+      request.isManual,
+      request.url || '',
+      request.source || ''
+    );
     sendResponse({ success: true });
+    return true;
   } else {
-    sendResponse({ success: false, error: 'Unknown action' });
+    // Ignore unknown actions instead of sending error
+    // This prevents issues when messages are broadcast or sent to wrong recipients
+    console.log('[RTool Popup] Ignoring unknown action:', request.action);
+    return false; // Don't keep the message channel open
   }
 });
 
@@ -165,7 +220,68 @@ const exportCsvBtn = document.getElementById('exportCsvBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
 const loggingStatus = document.getElementById('loggingStatus');
 
+// ============================================================================
+// CSV LOGGING SYSTEM
+// ============================================================================
+// ARCHITECTURE NOTES:
+// The logging system is SITE-INDEPENDENT and works the same way for all AI platforms.
+// It tracks:
+//   1. Auto-prompts sent via "Send to All Windows" button
+//   2. Manual prompts entered directly by the user
+//   3. Responses from the AI
+//
+// The logging system uses:
+//   - sessionLogs: Array of all log entries
+//   - windowPromptMap: Tracks the latest prompt for each window
+//   - responseId: Unique ID to match responses to prompts
+//
+// Site-specific extraction (content-extraction.js) provides the raw messages,
+// but the logging logic here is responsible for:
+//   - Associating responses with the correct prompts
+//   - Distinguishing between auto and manual prompts
+//   - Handling transforms for auto prompts
+//   - Exporting to CSV format
+//
+// Changes to site-specific extraction should NOT require changes to this logging code.
+// ============================================================================
+
 let sessionLogs = [];
+let nextResponseId = 1; // Counter for unique response IDs
+let windowPromptMap = {}; // Map to track the latest prompt for each window
+
+// Diagnostic function to check current state
+function logDiagnostics() {
+  console.log('=== RTool Diagnostics ===');
+  console.log(`Total log entries: ${sessionLogs.length}`);
+  console.log(`Pending entries: ${sessionLogs.filter(log => log.response === '(pending)').length}`);
+  console.log(`Completed entries: ${sessionLogs.filter(log => log.response !== '(pending)').length}`);
+  console.log('Entries by window:');
+  for (let i = 0; i < 10; i++) {
+    const windowLogs = sessionLogs.filter(log => log.windowIndex === i);
+    if (windowLogs.length > 0) {
+      const pending = windowLogs.filter(log => log.response === '(pending)').length;
+      const completed = windowLogs.filter(log => log.response !== '(pending)').length;
+      console.log(`  Window ${i}: ${windowLogs.length} total (${completed} completed, ${pending} pending)`);
+      windowLogs.forEach((log, idx) => {
+        console.log(`    [${idx}] ${log.basePrompt?.substring(0, 20)} | ${log.response === '(pending)' ? 'PENDING' : 'completed'}`);
+      });
+    }
+  }
+  console.log('Window Prompt Map:');
+  Object.keys(windowPromptMap).forEach(idx => {
+    const info = windowPromptMap[idx];
+    console.log(`  Window ${idx}:`, {
+      basePrompt: info.basePrompt?.substring(0, 30),
+      isManual: info.isManual,
+      isAutoPrompt: info.isAutoPrompt,
+      responseId: info.responseId
+    });
+  });
+  console.log('========================');
+}
+
+// Make it available globally for debugging
+window.rtoolDiagnostics = logDiagnostics;
 
 // Load logging configuration
 async function loadLoggingConfig() {
@@ -194,9 +310,27 @@ exportCsvBtn.addEventListener('click', () => {
     return;
   }
   
+  // Filter out entries with "(pending)" responses
+  const completedLogs = sessionLogs.filter(log => log.response !== '(pending)');
+  const skippedPendingCount = sessionLogs.length - completedLogs.length;
+  
+  if (completedLogs.length === 0) {
+    updateLoggingStatus('No completed logs to export (all are pending)');
+    return;
+  }
+  
+  if (skippedPendingCount > 0) {
+    console.log(`[RTool] Skipping ${skippedPendingCount} pending entries during CSV export`);
+    console.log(`[RTool] Pending entries:`, sessionLogs.filter(log => log.response === '(pending)').map(log => ({
+      window: log.windowIndex,
+      basePrompt: log.basePrompt,
+      prompt: log.prompt ? log.prompt.substring(0, 30) : 'NULL'
+    })));
+  }
+  
   // Create CSV content
   const headers = ['Timestamp', 'User ID', 'URL', 'Window', 'Base Prompt', 'Transform', 'Prompt', 'Response'];
-  const rows = sessionLogs.map(log => {
+  const rows = completedLogs.map(log => {
     // Format window name
     let windowName;
     if (log.windowIndex === 'Base') {
@@ -215,7 +349,7 @@ exportCsvBtn.addEventListener('click', () => {
       `"${(log.basePrompt || '').replace(/"/g, '""')}"`, // Base prompt (untransformed)
       log.transform || 'none:none',
       `"${(log.prompt || '').replace(/"/g, '""')}"`, // Transformed prompt
-      `"${(log.response || '(pending)').replace(/"/g, '""')}"` // Response
+      `"${(log.response || '').replace(/"/g, '""')}"` // Response (never pending)
     ];
   });
   
@@ -230,19 +364,54 @@ exportCsvBtn.addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
   
-  updateLoggingStatus(`${sessionLogs.length} entries logged`);
+  const pendingCount = sessionLogs.length - completedLogs.length;
+  if (pendingCount > 0) {
+    updateLoggingStatus(`Exported ${completedLogs.length} completed entries (${pendingCount} pending entries skipped)`);
+  } else {
+    updateLoggingStatus(`Exported ${completedLogs.length} log entries`);
+  }
 });
 
 // Clear logs
 clearLogsBtn.addEventListener('click', async () => {
   if (confirm(`Clear ${sessionLogs.length} log entries?`)) {
     console.log(`[RTool] Clearing ${sessionLogs.length} log entries...`);
+    
+    // Clear all logs and tracking variables
     sessionLogs = [];
-    await chrome.storage.local.set({ sessionLogs: [] });
+    windowPromptMap = {};
+    nextResponseId = 1;
+    
+    await chrome.storage.local.set({ 
+      sessionLogs: [],
+      windowPromptMap: {} // Also clear stored window prompt map
+    });
     // Reload to ensure we're in sync
     await loadLoggingConfig();
     console.log(`[RTool] Logs cleared, now have ${sessionLogs.length} entries`);
   }
+});
+
+// Add toggle for "Clear logs on startup" option
+const clearOnStartupToggle = document.createElement('div');
+clearOnStartupToggle.className = 'logging-option';
+clearOnStartupToggle.innerHTML = `
+  <label>
+    <input type="checkbox" id="clearLogsOnStartup" checked>
+    Clear logs on startup
+  </label>
+`;
+loggingStatus.parentNode.insertBefore(clearOnStartupToggle, loggingStatus);
+
+// Initialize and handle the toggle
+const clearLogsOnStartupCheckbox = document.getElementById('clearLogsOnStartup');
+chrome.storage.local.get('clearLogsOnStartup', (data) => {
+  clearLogsOnStartupCheckbox.checked = data.clearLogsOnStartup !== false;
+});
+
+clearLogsOnStartupCheckbox.addEventListener('change', async () => {
+  await chrome.storage.local.set({ clearLogsOnStartup: clearLogsOnStartupCheckbox.checked });
+  console.log(`[RTool] Clear logs on startup set to: ${clearLogsOnStartupCheckbox.checked}`);
 });
 
 // Update logging status message
@@ -267,6 +436,8 @@ openBtn.addEventListener('click', async () => {
   openBtn.disabled = true;
   
   try {
+    console.log('[RTool Popup] Sending openWindows message with:', { count, url, siteKey });
+    
     const response = await chrome.runtime.sendMessage({
       action: 'openWindows',
       count: count,
@@ -274,7 +445,7 @@ openBtn.addEventListener('click', async () => {
       siteKey: siteKey  // Pass site key for content script config
     });
     
-    console.log('[RTool Popup] Open windows response:', response);
+    console.log('[RTool Popup] Open windows response:', JSON.stringify(response, null, 2));
     
     if (response && response.success) {
       updateStatus(`✓ Opened ${response.count} window(s)`, 'success');
@@ -282,6 +453,13 @@ openBtn.addEventListener('click', async () => {
       initializeTransforms();
       sendBtn.disabled = false; // Enable send button
       console.log('[RTool Popup] Send button enabled');
+      
+      // Collapse the setup section after opening windows
+      const setupSection = document.getElementById('setupSection');
+      if (setupSection) {
+        setupSection.open = false;
+        console.log('[RTool Popup] Setup section collapsed');
+      }
       
       // Start monitoring for manual interactions
       setTimeout(async () => {
@@ -294,14 +472,18 @@ openBtn.addEventListener('click', async () => {
       }, 2000); // Wait for pages to load
     } else {
       const errorMsg = response?.error || 'Unknown error';
+      console.error('[RTool Popup] Open windows failed. Full response:', response);
+      console.error('[RTool Popup] Error message:', errorMsg);
+      console.error('[RTool Popup] Error type:', typeof errorMsg);
       updateStatus(`Error: ${errorMsg}`, 'error');
       sendBtn.disabled = true;
-      console.error('[RTool Popup] Open windows failed:', errorMsg);
     }
   } catch (error) {
+    console.error('[RTool Popup] Exception opening windows. Error object:', error);
+    console.error('[RTool Popup] Error message:', error.message);
+    console.error('[RTool Popup] Error stack:', error.stack);
     updateStatus(`Error: ${error.message}`, 'error');
     sendBtn.disabled = true;
-    console.error('[RTool Popup] Exception opening windows:', error);
   } finally {
     openBtn.disabled = false;
   }
@@ -323,6 +505,13 @@ closeBtn.addEventListener('click', async () => {
       windowTransforms = {};
       updateTransformsList();
       sendBtn.disabled = true; // Disable send button
+      
+      // Reopen the setup section when windows are closed
+      const setupSection = document.getElementById('setupSection');
+      if (setupSection) {
+        setupSection.open = true;
+        console.log('[RTool Popup] Setup section reopened');
+      }
     } else {
       updateStatus(`Error: ${response.error}`, 'error');
     }
@@ -528,6 +717,34 @@ async function logToCSV(prompt, results) {
     const siteConfig = getSiteConfig(siteKey);
     const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
     
+    // First, clear any existing pending entries for these windows
+    // This ensures we don't have multiple pending entries per window
+    const windowIndices = results.map(r => r.index);
+    
+    // Remove any existing pending entries for these windows
+    const existingPendingEntries = sessionLogs.filter(
+      log => log.response === '(pending)' && windowIndices.includes(log.windowIndex)
+    );
+    
+    if (existingPendingEntries.length > 0) {
+      console.log(`[RTool] Removing ${existingPendingEntries.length} existing pending entries for these windows`);
+      
+      // Remove each pending entry
+      for (const entry of existingPendingEntries) {
+        const index = sessionLogs.indexOf(entry);
+        if (index !== -1) {
+          sessionLogs.splice(index, 1);
+        }
+      }
+    }
+    
+    // First, create a shared auto prompt ID to link all windows receiving this prompt
+    const sharedAutoPromptId = `auto_batch_${nextResponseId++}`;
+    console.log(`[RTool] Creating auto prompt batch with ID: ${sharedAutoPromptId}`);
+    
+    // Create a log of which windows are receiving this auto prompt
+    console.log(`[RTool] Auto prompt sent to windows: ${results.map(r => r.index).join(', ')}`);
+    
     // Add entry for each window with base prompt and transformed prompt
     for (const result of results) {
       // Parse the transform
@@ -540,7 +757,46 @@ async function logToCSV(prompt, results) {
       // Apply transform to get the actual sent prompt
       const transformedPrompt = applyTransformForLog(prompt, transformObj);
       
-      sessionLogs.push({
+      // Generate a unique response ID for this entry
+      // Make sure it's unique for each window
+      const responseId = `auto_${result.index}_${nextResponseId++}`;
+      
+      // Store this prompt as the latest for this window
+      // AND store it in a global auto prompt map that all windows can access
+      const autoPromptInfo = {
+        basePrompt: prompt, // Always store the original prompt as base prompt
+        transformedPrompt: transformedPrompt,
+        transform: result.transform || 'none:none',
+        isManual: false,
+        isAutoPrompt: true, // Explicitly mark as auto prompt
+        responseId: responseId,
+        sharedAutoPromptId: sharedAutoPromptId, // Link to the batch
+        timestamp: timestamp
+      };
+      
+      // Ensure we're not accidentally setting this as a manual prompt
+      // This is critical for auto prompts with no transform
+      if (transformObj.category === 'none' && transformObj.method === 'none') {
+        console.log(`[RTool] Auto prompt with no transform for window ${result.index}, ensuring it's marked as auto`);
+        autoPromptInfo.isAutoPrompt = true;
+        autoPromptInfo.isManual = false;
+        autoPromptInfo.manualOverride = false;
+      }
+      
+      console.log(`[RTool] Setting auto prompt info for window ${result.index}:`, 
+        JSON.stringify({
+          basePrompt: prompt.substring(0, 30),
+          transform: result.transform || 'none:none',
+          isAutoPrompt: true,
+          windowIndex: result.index
+        })
+      );
+      
+      // Store in window-specific map
+      windowPromptMap[result.index] = autoPromptInfo;
+      
+      // Create a unique entry for each window
+      const autoEntry = {
         timestamp: timestamp,
         userId: userIdValue,
         url: siteUrl,
@@ -549,13 +805,79 @@ async function logToCSV(prompt, results) {
         transform: result.transform || 'none:none',
         prompt: transformedPrompt, // Transformed prompt
         response: '(pending)',
+        responseId: responseId, // Unique ID to match responses
+        sharedAutoPromptId: sharedAutoPromptId, // Link to other windows with same prompt
+        isManual: false, // Flag as auto-sent prompt
+        isAutoPrompt: true, // Explicitly mark as auto prompt
         success: result.success || false
-      });
+      };
+      
+      // Double check that we're not accidentally setting this as a manual prompt
+      if (transformObj.category === 'none' && transformObj.method === 'none') {
+        console.log(`[RTool] Ensuring auto prompt with no transform for window ${result.index} is properly labeled`);
+        // For auto prompts with no transform, make sure they're still marked as auto
+        autoEntry.basePrompt = prompt; // Use the actual prompt text
+        autoEntry.isAutoPrompt = true;
+        autoEntry.isManual = false;
+        autoEntry.manualOverride = false;
+      }
+      
+      sessionLogs.push(autoEntry);
+      
+      console.log(`[RTool] Created new pending entry for window ${result.index} with transform ${result.transform}, responseId: ${responseId}, sharedAutoPromptId: ${sharedAutoPromptId}`);
     }
     
-    // Save to storage
-    await chrome.storage.local.set({ sessionLogs: sessionLogs });
+    // Store the shared auto prompt info in storage for persistence
+    // Include transform information for each window
+    const autoPromptData = {
+      sharedAutoPromptId: sharedAutoPromptId,
+      basePrompt: prompt,
+      timestamp: timestamp,
+      windowIndices: results.map(r => r.index),
+      // Store transforms for each window
+      windowTransforms: results.reduce((acc, result) => {
+        acc[result.index] = result.transform || 'none:none';
+        return acc;
+      }, {})
+    };
+    
+    console.log(`[RTool] Auto prompt data for sharing: ${JSON.stringify(autoPromptData)}`);
+    
+    // Also store this information directly in each window's prompt map
+    // This ensures the transform information is available even if the auto prompt batch is lost
+    results.forEach(result => {
+      const transformParts = (result.transform || 'none:none').split(':');
+      windowPromptMap[result.index] = {
+        ...windowPromptMap[result.index],
+        basePrompt: prompt, // Ensure base prompt is stored for each window
+        transform: result.transform || 'none:none',
+        sharedAutoPromptId: sharedAutoPromptId,
+        isAutoPrompt: true
+      };
+    });
+    
+    // Get existing auto prompts or initialize empty array
+    chrome.storage.local.get('autoPrompts', (data) => {
+      const autoPrompts = data.autoPrompts || [];
+      autoPrompts.push(autoPromptData);
+      // Keep only the last 10 auto prompts
+      if (autoPrompts.length > 10) {
+        autoPrompts.shift();
+      }
+      chrome.storage.local.set({ autoPrompts: autoPrompts });
+    });
+    
+    // Save to storage - make sure to save both sessionLogs and windowPromptMap
+    await chrome.storage.local.set({ 
+      sessionLogs: sessionLogs,
+      windowPromptMap: windowPromptMap
+    });
     updateLoggingStatus(`${sessionLogs.length} entries logged`);
+    
+    // Double-check that all windows have their auto prompt info
+    for (const result of results) {
+      console.log(`[RTool] Window ${result.index} auto prompt info:`, windowPromptMap[result.index]);
+    }
     
     console.log('[RTool] Logged to CSV buffer');
   } catch (error) {
@@ -564,37 +886,185 @@ async function logToCSV(prompt, results) {
 }
 
 // Add a manual prompt entry (from input monitoring)
-async function addManualPromptEntry(windowIndex, prompt, timestamp) {
+async function addManualPromptEntry(windowIndex, prompt, timestamp, isManual = true, url = '', source = '') {
   try {
     const data = await chrome.storage.local.get('loggingEnabled');
     if (!data.loggingEnabled) {
       return;
     }
 
-    console.log(`[RTool] addManualPromptEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}`);
+    console.log(`[RTool] ========================================`);
+    console.log(`[RTool] addManualPromptEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}, source=${source}`);
+    console.log(`[RTool] Current windowPromptMap[${windowIndex}]:`, windowPromptMap[windowIndex] ? JSON.stringify(windowPromptMap[windowIndex]) : 'NULL');
+    console.log(`[RTool] Current pending entries for window ${windowIndex}:`, sessionLogs.filter(log => log.windowIndex === windowIndex && log.response === '(pending)').length);
+    console.log(`[RTool] ========================================`);
+
+    // Critical check - ensure windowIndex is valid
+    if (windowIndex === null || windowIndex === undefined) {
+      console.error('[RTool] Invalid window index in addManualPromptEntry');
+      windowIndex = 0; // Default to window 0 as fallback
+    }
+
+    // First, check if we already have a pending entry for this window
+    const existingPendingEntries = sessionLogs.filter(
+      log => log.response === '(pending)' && log.windowIndex === windowIndex
+    );
+
+    // If we have pending entries for this window, only remove duplicates for the same prompt.
+    if (existingPendingEntries.length > 0) {
+      console.log(`[RTool] [Window ${windowIndex}] Found ${existingPendingEntries.length} existing pending entries`);
+      
+      // Check if any of these are for the same prompt (duplicate)
+      const duplicatePendingEntry = existingPendingEntries.find(entry => 
+        entry.prompt === prompt || entry.basePrompt === prompt
+      );
+      
+      if (duplicatePendingEntry) {
+        console.log(`[RTool] [Window ${windowIndex}] Found duplicate pending entry, skipping new entry creation`);
+        return; // Don't create a duplicate
+      }
+      // Do NOT clear other pending entries (e.g., auto prompts). They will be matched by type.
+    }
+
+    // Also check if we already have this exact prompt for this window
+    let duplicatePrompt = sessionLogs.some(
+      log => log.windowIndex === windowIndex && 
+             (log.basePrompt === prompt || log.prompt === prompt) &&
+             log.response !== '(pending)'
+    );
+
+    if (duplicatePrompt) {
+      console.log(`[RTool] Duplicate prompt detected for window ${windowIndex}, not adding new entry`);
+      return;
+    }
 
     // Get current site URL
     const siteKey = siteSelect.value;
     const siteConfig = getSiteConfig(siteKey);
     const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
 
+    // Generate a unique response ID for this manual entry
+    const responseId = `manual_${windowIndex}_${nextResponseId++}`;
+    
+    // Store this as the latest prompt for this window
+    // Explicitly mark it as manual and NOT auto prompt
+    // IMPORTANT: Clear any previous auto prompt information for this window
+    
+    // CRITICAL: Completely clear any auto-prompt state for this window
+    console.log(`[RTool] [Window ${windowIndex}] CLEARING ALL AUTO-PROMPT STATE`);
+    
+    // Step 1: Clear from storage
+    try {
+      chrome.storage.local.get('autoPrompts', (data) => {
+        const autoPrompts = data.autoPrompts || [];
+        let modified = false;
+        
+        // Remove this window from ALL auto prompt batches
+        autoPrompts.forEach(batch => {
+          if (batch.windowIndices && batch.windowIndices.includes(windowIndex)) {
+            batch.windowIndices = batch.windowIndices.filter(idx => idx !== windowIndex);
+            if (batch.windowTransforms && batch.windowTransforms[windowIndex]) {
+              delete batch.windowTransforms[windowIndex];
+            }
+            modified = true;
+            console.log(`[RTool] [Window ${windowIndex}] Removed from auto prompt batch ${batch.sharedAutoPromptId}`);
+          }
+        });
+        
+        // Save if modified
+        if (modified) {
+          chrome.storage.local.set({ autoPrompts: autoPrompts });
+          console.log(`[RTool] [Window ${windowIndex}] Auto prompts cleared from storage`);
+        }
+      });
+    } catch (e) {
+      console.error(`[RTool] [Window ${windowIndex}] Error cleaning up auto prompts:`, e);
+    }
+    
+    // Step 2: Clear from windowPromptMap (do this immediately, don't wait for storage)
+    if (windowPromptMap[windowIndex]) {
+      console.log(`[RTool] [Window ${windowIndex}] Clearing windowPromptMap entry (was: ${JSON.stringify(windowPromptMap[windowIndex])})`);
+      delete windowPromptMap[windowIndex];
+    }
+    
+    // Now set the manual prompt info
+    windowPromptMap[windowIndex] = {
+      basePrompt: 'Manual Prompt',
+      transformedPrompt: prompt,
+      transform: 'none:none',
+      isManual: true,
+      isAutoPrompt: false, // Explicitly mark as NOT an auto prompt
+      responseId: responseId,
+      timestamp: timestamp || new Date().toISOString(),
+      source: source || 'manual_entry', // Track the source for debugging
+      url: url, // Store URL for reference
+      manualOverride: true // Special flag to indicate this is a manual entry that should override auto prompt info
+    };
+    
+    // Log that we've set this window to manual mode
+    console.log(`[RTool] Window ${windowIndex} is now in MANUAL MODE with prompt: ${prompt.substring(0, 30)}...`);
+    
+    // Also check if this window is part of any auto prompt batch and remove it
+    chrome.storage.local.get('autoPrompts', (data) => {
+      const autoPrompts = data.autoPrompts || [];
+      let modified = false;
+      
+      // Remove this window from any auto prompt batches
+      autoPrompts.forEach(batch => {
+        if (batch.windowIndices && batch.windowIndices.includes(windowIndex)) {
+          batch.windowIndices = batch.windowIndices.filter(idx => idx !== windowIndex);
+          modified = true;
+          console.log(`[RTool] Removed window ${windowIndex} from auto prompt batch ${batch.sharedAutoPromptId}`);
+        }
+      });
+      
+      // Save if modified
+      if (modified) {
+        chrome.storage.local.set({ autoPrompts: autoPrompts });
+      }
+    });
+    
     // Create new manual entry with pending response
-    sessionLogs.push({
+    // For manual entries, basePrompt should be "Manual Prompt" and prompt should be the actual text
+    // Ensure we're not copying any auto prompt information
+    const newEntry = {
       timestamp: timestamp || new Date().toISOString(),
       userId: userId.value.trim() || '(unknown)',
       url: siteUrl,
       windowIndex: windowIndex,
-      basePrompt: prompt, // Manual prompt
+      basePrompt: 'Manual Prompt', // Label as manual prompt in basePrompt column
       transform: 'none:none', // No transform for manual
       prompt: prompt, // The actual prompt text
       response: '(pending)', // Will be updated when response comes
-      success: true
+      responseId: responseId, // Unique ID to match responses
+      isManual: true, // Flag as manual entry
+      isAutoPrompt: false, // Explicitly mark as NOT an auto prompt
+      success: true,
+      source: source || 'manual_entry', // Track the source for debugging
+      manualOverride: true // Special flag to indicate this is a manual entry that should override auto prompt info
+    };
+    
+    // Log the manual entry details for debugging
+    console.log(`[RTool] Creating new manual entry for window ${windowIndex}:`, 
+      JSON.stringify({
+        basePrompt: newEntry.basePrompt,
+        prompt: prompt.substring(0, 30),
+        isManual: true,
+        responseId: responseId
+      })
+    );
+    
+    sessionLogs.push(newEntry);
+    
+    console.log(`[RTool] Added manual prompt entry for window ${windowIndex} with responseId: ${responseId}`);
+
+    // Save to storage immediately to ensure it's not lost
+    await chrome.storage.local.set({ 
+      sessionLogs: sessionLogs,
+      // Also save the latest window prompt map to ensure consistency
+      windowPromptMap: windowPromptMap
     });
-
-    console.log(`[RTool] Added manual prompt entry for window ${windowIndex}`);
-
-    // Save to storage
-    await chrome.storage.local.set({ sessionLogs: sessionLogs });
+    
     updateLoggingStatus(`${sessionLogs.length} entries logged`);
   } catch (error) {
     console.error('[RTool] Failed to add manual prompt entry:', error);
@@ -602,91 +1072,548 @@ async function addManualPromptEntry(windowIndex, prompt, timestamp) {
 }
 
 // Add a log entry (from conversation monitoring or manual interaction)
-async function addLogEntry(windowIndex, prompt, response, timestamp) {
+async function addLogEntry(windowIndex, prompt, response, timestamp, meta = {}) {
   try {
     const data = await chrome.storage.local.get('loggingEnabled');
     if (!data.loggingEnabled) {
       return;
     }
 
+    console.log(`[RTool] ========================================`);
     console.log(`[RTool] addLogEntry called: window=${windowIndex}, prompt=${prompt ? prompt.substring(0, 30) : 'NULL'}, response length=${response?.length}`);
-
-    // Try to find a pending entry for this window
-    let windowPendingIndex = -1;
-
-    if (prompt) {
-      // If we have a prompt, try to match it to existing pending entries
-      // For manual prompts, the entry was created with the prompt text
-      const matchingEntries = sessionLogs.filter(
-        log => log.windowIndex === windowIndex &&
-               log.response === '(pending)' &&
-               (log.basePrompt === prompt || log.prompt === prompt)
+    console.log(`[RTool] Current windowPromptMap[${windowIndex}]:`, windowPromptMap[windowIndex] ? JSON.stringify(windowPromptMap[windowIndex]) : 'NULL');
+    console.log(`[RTool] ========================================`);
+    
+    // Critical check - ensure windowIndex is valid
+    if (windowIndex === null || windowIndex === undefined) {
+      console.error('[RTool] Invalid window index in addLogEntry');
+      windowIndex = 0; // Default to window 0 as fallback
+    }
+    
+    // NEVER log pending responses
+    if (response === '(pending)') {
+      console.log('[RTool] Refusing to log "(pending)" placeholder');
+      return;
+    }
+    
+    // Check if this response is a duplicate
+    const isDuplicate = sessionLogs.some(log => 
+      log.windowIndex === windowIndex && 
+      log.response === response && 
+      log.response !== '(pending)'
+    );
+    
+    if (isDuplicate) {
+      console.log('[RTool] Duplicate response detected, skipping');
+      return;
+    }
+    
+    // STEP 1: Look for a pending entry with matching responseId
+    // First, look for entries with a responseId that matches the window's latest prompt
+    const latestPrompt = windowPromptMap[windowIndex];
+    let matchedEntry = null;
+    let matchedEntryIndex = -1;
+    
+    // Check if this is a manual prompt response
+    // For manual prompts, we need to be more aggressive in checking
+    // Prefer explicit meta flags if provided
+    const explicitIsManual = meta && meta.isManual === true;
+    const explicitIsAuto = meta && meta.isAuto === true;
+    const isManualPrompt = explicitIsManual || (latestPrompt && (
+      latestPrompt.isManual === true || 
+      latestPrompt.manualOverride === true ||
+      (latestPrompt.basePrompt === 'Manual Prompt')
+    ));
+    if (isManualPrompt) {
+      console.log(`[RTool] This appears to be a response to a manual prompt for window ${windowIndex}`);
+    }
+    
+    if (latestPrompt && latestPrompt.responseId && !explicitIsAuto) {
+      // Only trust latestPrompt.responseId when we are NOT explicitly told this is an auto response.
+      matchedEntryIndex = sessionLogs.findIndex(log => 
+        log.responseId === latestPrompt.responseId && 
+        log.response === '(pending)'
       );
-      console.log(`[RTool] Found ${matchingEntries.length} matching pending entries for prompt`);
-
-      if (matchingEntries.length > 0) {
-        windowPendingIndex = sessionLogs.indexOf(matchingEntries[0]);
-        console.log(`[RTool] Using first match at index: ${windowPendingIndex}`);
-      } else {
-        console.log(`[RTool] No matching pending entries found for prompt`);
-      }
-    } else {
-      // If no prompt provided (RTOOL response), find any pending entry for this window
-      const pendingEntries = sessionLogs.filter(log => log.response === '(pending)' && log.windowIndex === windowIndex);
-      console.log(`[RTool] Found ${pendingEntries.length} pending entries for window ${windowIndex}`);
-
-      if (pendingEntries.length > 0) {
-        windowPendingIndex = sessionLogs.indexOf(pendingEntries[0]);
-        console.log(`[RTool] Using first pending entry at index: ${windowPendingIndex}`);
-      } else {
-        console.log(`[RTool] No pending entries found for window ${windowIndex}`);
+      
+      if (matchedEntryIndex !== -1) {
+        matchedEntry = sessionLogs[matchedEntryIndex];
+        console.log(`[RTool] Found matching entry by responseId: ${latestPrompt.responseId}`);
+        
+        // Ensure manual prompts are correctly labeled
+        if (isManualPrompt) {
+          console.log(`[RTool] Ensuring manual prompt is correctly labeled for window ${windowIndex}`);
+          sessionLogs[matchedEntryIndex].basePrompt = 'Manual Prompt';
+          sessionLogs[matchedEntryIndex].transform = 'none:none';
+          sessionLogs[matchedEntryIndex].isManual = true;
+          sessionLogs[matchedEntryIndex].isAutoPrompt = false;
+        }
       }
     }
-
-    if (windowPendingIndex !== -1) {
-      // Update existing window entry with response
-      sessionLogs[windowPendingIndex].response = response;
-      console.log(`[RTool] Updated window ${windowIndex} log entry with response: ${response.substring(0, 50)}...`);
-    } else {
-      // No pending entry found - create new entry anyway so responses don't get lost
-      console.log(`[RTool] No pending entry found for window ${windowIndex}, creating new entry`);
-
-      // Check if we already have this exact response for this window (avoid duplicates)
-      const existingResponse = sessionLogs.findIndex(
-        log => log.windowIndex === windowIndex &&
-               log.response === response &&
-               log.response !== '(pending)' // Don't match pending entries
+    
+    // STEP 2: If no match by responseId, try matching by window index and pending status
+    if (!matchedEntry) {
+      // Get pending entries for this window
+      const pendingEntriesForWindow = sessionLogs.filter(
+        log => log.response === '(pending)' && log.windowIndex === windowIndex
       );
+      
+      if (pendingEntriesForWindow.length > 0) {
+        console.log(`[RTool] Found ${pendingEntriesForWindow.length} pending entries for window ${windowIndex}`);
+        
+        // PRIORITY 1a: If explicitly AUTO, choose auto pending first
+        if (explicitIsAuto) {
+          const autoPendingEntry = pendingEntriesForWindow.find(log => 
+            log.isManual !== true && log.isAutoPrompt === true
+          );
+          if (autoPendingEntry) {
+            matchedEntry = autoPendingEntry;
+            matchedEntryIndex = sessionLogs.indexOf(matchedEntry);
+            console.log(`[RTool] [PRIORITY] Matched to AUTO pending entry for window ${windowIndex}`);
+          }
+        }
 
-      if (existingResponse !== -1) {
-        console.log(`[RTool] Response already exists for window ${windowIndex}, skipping duplicate`);
-        return;
+        // PRIORITY 1b: If we expect a manual prompt, look for manual entries first
+        if (!matchedEntry && isManualPrompt) {
+          const manualPendingEntry = pendingEntriesForWindow.find(log => 
+            log.isManual === true || 
+            log.manualOverride === true || 
+            log.basePrompt === 'Manual Prompt'
+          );
+          
+          if (manualPendingEntry) {
+            matchedEntry = manualPendingEntry;
+            matchedEntryIndex = sessionLogs.indexOf(matchedEntry);
+            console.log(`[RTool] [PRIORITY] Matched to manual pending entry for window ${windowIndex}`);
+          }
+        }
+        
+        // PRIORITY 2: If still not found, use the most recent pending entry
+        if (!matchedEntry) {
+          // Sort by timestamp (newest first)
+          pendingEntriesForWindow.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          matchedEntry = pendingEntriesForWindow[0];
+          matchedEntryIndex = sessionLogs.indexOf(matchedEntry);
+          console.log(`[RTool] Found matching entry by window index: ${windowIndex}, isManual: ${matchedEntry.isManual}, basePrompt: ${matchedEntry.basePrompt}`);
+        }
+        
+        // Ensure manual prompts are correctly labeled
+        if (isManualPrompt) {
+          console.log(`[RTool] Ensuring manual prompt is correctly labeled for window ${windowIndex} (step 2)`);
+          sessionLogs[matchedEntryIndex].basePrompt = 'Manual Prompt';
+          sessionLogs[matchedEntryIndex].transform = 'none:none';
+          sessionLogs[matchedEntryIndex].isManual = true;
+          sessionLogs[matchedEntryIndex].isAutoPrompt = false;
+          sessionLogs[matchedEntryIndex].manualOverride = true;
+        }
       }
-
-      // Add new entry
-      const userIdValue = userId.value.trim() || '(unknown)';
-
-      // Get current site URL
+    }
+    
+    // STEP 3: If we found a matching entry, update it
+    if (matchedEntry) {
+      // Update the existing entry with the response
+      sessionLogs[matchedEntryIndex].response = response;
+      
+      // Final check to ensure manual prompts are correctly labeled
+      if (isManualPrompt) {
+        console.log(`[RTool] Final check for manual prompt labeling for window ${windowIndex}`);
+        sessionLogs[matchedEntryIndex].basePrompt = 'Manual Prompt';
+        sessionLogs[matchedEntryIndex].transform = 'none:none';
+        sessionLogs[matchedEntryIndex].isManual = true;
+        sessionLogs[matchedEntryIndex].isAutoPrompt = false;
+        sessionLogs[matchedEntryIndex].manualOverride = true;
+      }
+      
+      // Special handling for Window 1 and Window 2 prompts
+      // These windows seem to have issues with manual/auto detection
+      if (windowIndex === 0 || windowIndex === 1) {
+        // Only apply special handling if we don't have explicit auto prompt info
+        // This is critical to avoid mislabeling auto prompts as manual
+        const hasExplicitAutoPromptInfo = 
+          sessionLogs[matchedEntryIndex].isAutoPrompt === true && 
+          sessionLogs[matchedEntryIndex].basePrompt && 
+          sessionLogs[matchedEntryIndex].basePrompt !== 'Manual Prompt';
+        
+        if (!hasExplicitAutoPromptInfo) {
+          // Check if this looks like a manual prompt response
+          const isLikelyManual = prompt && !prompt.includes('transform') && 
+                                sessionLogs[matchedEntryIndex].prompt && 
+                                sessionLogs[matchedEntryIndex].prompt.length < 500;
+          
+          if (isLikelyManual) {
+            console.log(`[RTool] Special handling for Window ${windowIndex} likely manual prompt`);
+            sessionLogs[matchedEntryIndex].basePrompt = 'Manual Prompt';
+            sessionLogs[matchedEntryIndex].transform = 'none:none';
+            sessionLogs[matchedEntryIndex].isManual = true;
+            sessionLogs[matchedEntryIndex].isAutoPrompt = false;
+            sessionLogs[matchedEntryIndex].manualOverride = true;
+          }
+        } else {
+          console.log(`[RTool] Window ${windowIndex} has explicit auto prompt info, preserving it`);
+        }
+      }
+      
+      // Do NOT remove other pending entries; allow auto and manual entries to complete independently
+      
+      console.log(`[RTool] [Window ${windowIndex}] ✓ Updated entry with response: ${response.substring(0, 50)}...`);
+      console.log(`[RTool] [Window ${windowIndex}] Entry details:`, {
+        basePrompt: sessionLogs[matchedEntryIndex].basePrompt,
+        transform: sessionLogs[matchedEntryIndex].transform,
+        isManual: sessionLogs[matchedEntryIndex].isManual,
+        isAutoPrompt: sessionLogs[matchedEntryIndex].isAutoPrompt
+      });
+      
+      // Save to storage
+      await chrome.storage.local.set({ sessionLogs: sessionLogs });
+      updateLoggingStatus(`${sessionLogs.length} entries logged`);
+      
+      // Log current state for debugging
+      const pendingCount = sessionLogs.filter(log => log.response === '(pending)').length;
+      const completedCount = sessionLogs.filter(log => log.response !== '(pending)').length;
+      console.log(`[RTool] Current log state: ${completedCount} completed, ${pendingCount} pending`);
+      
+      return;
+    }
+    
+    // STEP 4: If no matching entry was found, create a new one
+    console.log(`[RTool] ⚠️ No matching entry found for window ${windowIndex}`);
+    console.log(`[RTool] [Window ${windowIndex}] Current windowPromptMap:`, windowPromptMap[windowIndex] ? JSON.stringify(windowPromptMap[windowIndex]) : 'NULL');
+    console.log(`[RTool] [Window ${windowIndex}] All pending entries:`, sessionLogs.filter(log => log.response === '(pending)').map(log => ({
+      window: log.windowIndex,
+      basePrompt: log.basePrompt?.substring(0, 20),
+      isManual: log.isManual
+    })));
+    
+    // CRITICAL: If windowPromptMap indicates this is a manual prompt, DO NOT fall back to auto-prompt reconstruction
+    if ((meta && meta.isManual === true) || (windowPromptMap[windowIndex] && windowPromptMap[windowIndex].isManual === true)) {
+      console.warn(`[RTool] [Window ${windowIndex}] Manual response arrived without pending entry - creating completed manual entry now`);
+      
+      // Build completed manual entry using available prompt information
       const siteKey = siteSelect.value;
       const siteConfig = getSiteConfig(siteKey);
       const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
-
-      // Determine if this is a response to a manual prompt or a standalone response
-      const isManualResponse = !prompt && response;
-      const promptText = prompt || (isManualResponse ? 'Manual Interaction' : 'Unknown Prompt');
-
+      
+      const storedPromptInfo = windowPromptMap[windowIndex] || {};
+      const manualPromptText = prompt || storedPromptInfo.transformedPrompt || storedPromptInfo.basePrompt || 'Manual Prompt';
+      
+      const responseId = `manual_now_${windowIndex}_${nextResponseId++}`;
+      
       sessionLogs.push({
         timestamp: timestamp || new Date().toISOString(),
-        userId: userIdValue,
+        userId: userId.value.trim() || '(unknown)',
         url: siteUrl,
         windowIndex: windowIndex,
-        basePrompt: promptText,
+        basePrompt: 'Manual Prompt',
         transform: 'none:none',
-        prompt: promptText,
+        prompt: manualPromptText,
         response: response,
-        success: true
+        responseId: responseId,
+        isManual: true,
+        isAutoPrompt: false,
+        success: true,
+        manualOverride: true
       });
-      console.log(`[RTool] Added ${isManualResponse ? 'manual response' : 'fallback'} entry for window ${windowIndex}`);
+      
+      await chrome.storage.local.set({ sessionLogs: sessionLogs });
+      updateLoggingStatus(`${sessionLogs.length} entries logged`);
+      console.log(`[RTool] [Window ${windowIndex}] ✓ Created completed manual entry on-the-fly`);
+      return;
+    }
+    
+    console.log(`[RTool] Creating fallback entry for window ${windowIndex}`);
+    
+    // Generate a unique response ID for this fallback entry
+    const responseId = `fallback_${nextResponseId++}`;
+    
+    // Get current site URL
+    const siteKey = siteSelect.value;
+    const siteConfig = getSiteConfig(siteKey);
+    const siteUrl = siteConfig ? siteConfig.url.replace('https://', '').replace(/\/$/, '') : '';
+    
+    // STEP 4.1: First check if this window is part of a shared auto prompt batch
+    // Load stored auto prompts
+    try {
+      // Load both auto prompts and the window prompt map to ensure we have the most complete information
+      const [autoPromptsData, storedWindowPromptMap] = await Promise.all([
+        chrome.storage.local.get('autoPrompts'),
+        chrome.storage.local.get('windowPromptMap')
+      ]);
+      
+      const autoPrompts = autoPromptsData.autoPrompts || [];
+      const storedMap = storedWindowPromptMap.windowPromptMap || {};
+      
+      // If we have stored window prompt map data, merge it with our current map
+      if (Object.keys(storedMap).length > 0) {
+        console.log('[RTool] Found stored window prompt map, merging with current');
+        // Only update entries we don't already have
+        Object.keys(storedMap).forEach(idx => {
+          if (!windowPromptMap[idx] && storedMap[idx]) {
+            windowPromptMap[idx] = storedMap[idx];
+          }
+        });
+      }
+      
+      // Find if this window is part of any auto prompt batch
+      // Sort by timestamp descending to get the most recent first
+      autoPrompts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      const matchingBatch = autoPrompts.find(batch => 
+        batch.windowIndices && batch.windowIndices.includes(windowIndex)
+      );
+      
+      if (matchingBatch) {
+        console.log(`[RTool] Found matching auto prompt batch for window ${windowIndex}:`, matchingBatch);
+        
+        // This is an auto-prompt window, use the shared base prompt
+        // Get the transform for this window from the batch
+        const windowTransform = matchingBatch.windowTransforms?.[windowIndex] || 'none:none';
+        
+        // If we have a transform, apply it to get the transformed prompt
+        let transformedPrompt = prompt || matchingBatch.basePrompt;
+        if (windowTransform !== 'none:none' && matchingBatch.basePrompt) {
+          // Parse the transform
+          const transformParts = windowTransform.split(':');
+          const transformObj = {
+            category: transformParts[0],
+            method: transformParts[1]
+          };
+          
+          // Apply transform if possible
+          try {
+            transformedPrompt = applyTransformForLog(matchingBatch.basePrompt, transformObj);
+          } catch (e) {
+            console.error('[RTool] Error applying transform:', e);
+          }
+        }
+        
+        // Store this information in the window prompt map for future reference
+        windowPromptMap[windowIndex] = {
+          basePrompt: matchingBatch.basePrompt,
+          transformedPrompt: transformedPrompt,
+          transform: windowTransform,
+          isManual: false,
+          isAutoPrompt: true,
+          sharedAutoPromptId: matchingBatch.sharedAutoPromptId,
+          timestamp: matchingBatch.timestamp
+        };
+        
+        // Save the updated window prompt map to storage
+        chrome.storage.local.set({ windowPromptMap: windowPromptMap });
+        
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          userId: userId.value.trim() || '(unknown)',
+          url: siteUrl,
+          windowIndex: windowIndex,
+          basePrompt: matchingBatch.basePrompt, // Use the shared base prompt
+          transform: windowTransform, // Use the window-specific transform
+          prompt: transformedPrompt, // Use transformed prompt if available
+          response: response,
+          responseId: responseId,
+          sharedAutoPromptId: matchingBatch.sharedAutoPromptId,
+          isManual: false, // Mark as auto-prompt, not manual
+          isAutoPrompt: true,
+          success: true
+        });
+        
+        console.log(`[RTool] Created entry for window ${windowIndex} using shared auto prompt batch`);
+        return;
+      }
+    } catch (error) {
+      console.error('[RTool] Error checking auto prompt batches:', error);
+    }
+    
+    // STEP 4.2: Check if we have window-specific prompt info
+    if (windowPromptMap[windowIndex]) {
+      // Use the stored prompt information
+      const storedPrompt = windowPromptMap[windowIndex];
+      
+      // For auto-prompts, ensure we have the base prompt and transform
+      if (storedPrompt.isAutoPrompt && !storedPrompt.isManual) {
+        console.log(`[RTool] Using stored auto-prompt info for window ${windowIndex}`);
+        
+        // Check if we need to apply a transform
+        let transformedPrompt = storedPrompt.transformedPrompt || prompt || storedPrompt.basePrompt;
+        if (!storedPrompt.transformedPrompt && storedPrompt.transform !== 'none:none' && storedPrompt.basePrompt) {
+          // Parse the transform
+          const transformParts = storedPrompt.transform.split(':');
+          const transformObj = {
+            category: transformParts[0],
+            method: transformParts[1]
+          };
+          
+          // Apply transform if possible
+          try {
+            transformedPrompt = applyTransformForLog(storedPrompt.basePrompt, transformObj);
+          } catch (e) {
+            console.error('[RTool] Error applying transform:', e);
+          }
+        }
+        
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          userId: userId.value.trim() || '(unknown)',
+          url: siteUrl,
+          windowIndex: windowIndex,
+          basePrompt: storedPrompt.basePrompt,
+          transform: storedPrompt.transform,
+          prompt: transformedPrompt,
+          response: response,
+          responseId: responseId,
+          sharedAutoPromptId: storedPrompt.sharedAutoPromptId,
+          isManual: false,
+          isAutoPrompt: true,
+          success: true
+        });
+      } else {
+        // For manual prompts, use the stored information
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          userId: userId.value.trim() || '(unknown)',
+          url: siteUrl,
+          windowIndex: windowIndex,
+          basePrompt: storedPrompt.basePrompt,
+          transform: storedPrompt.transform,
+          prompt: storedPrompt.transformedPrompt || prompt,
+          response: response,
+          responseId: responseId,
+          sharedAutoPromptId: storedPrompt.sharedAutoPromptId,
+          isManual: storedPrompt.isManual,
+          isAutoPrompt: storedPrompt.isAutoPrompt || false,
+          success: true
+        });
+      }
+      
+      console.log(`[RTool] Created new entry using stored prompt info for window ${windowIndex}`);
+    } else {
+    // STEP 4.3: Check if any other window has auto-prompt info we can use
+    // This is a more general approach that works for any window
+    let foundAutoPrompt = false;
+    
+    // First, check if we have any auto-prompt batches that include this window
+    try {
+      const autoPromptsData = await chrome.storage.local.get('autoPrompts');
+      const autoPrompts = autoPromptsData.autoPrompts || [];
+      
+      // Sort by timestamp descending to get the most recent first
+      autoPrompts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      // Find if this window is part of any auto prompt batch
+      const matchingBatch = autoPrompts.find(batch => 
+        batch.windowIndices && batch.windowIndices.includes(windowIndex)
+      );
+      
+      if (matchingBatch) {
+        console.log(`[RTool] Found matching auto prompt batch for window ${windowIndex} in storage:`, matchingBatch);
+        
+        // Get the transform for this window from the batch
+        const windowTransform = matchingBatch.windowTransforms?.[windowIndex] || 'none:none';
+        
+        // This is an auto-prompt window, use the shared base prompt
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          userId: userId.value.trim() || '(unknown)',
+          url: siteUrl,
+          windowIndex: windowIndex,
+          basePrompt: matchingBatch.basePrompt, // Use the shared base prompt
+          transform: windowTransform, // Use the window-specific transform
+          prompt: prompt || matchingBatch.basePrompt, // Use provided prompt or base prompt
+          response: response,
+          responseId: responseId,
+          sharedAutoPromptId: matchingBatch.sharedAutoPromptId,
+          isManual: false, // Mark as auto-prompt, not manual
+          isAutoPrompt: true,
+          success: true
+        });
+        
+        // Store this info for future reference
+        windowPromptMap[windowIndex] = {
+          basePrompt: matchingBatch.basePrompt,
+          transformedPrompt: prompt || matchingBatch.basePrompt,
+          transform: windowTransform,
+          isManual: false,
+          isAutoPrompt: true,
+          sharedAutoPromptId: matchingBatch.sharedAutoPromptId,
+          timestamp: matchingBatch.timestamp
+        };
+        
+        // Save the updated window prompt map
+        await chrome.storage.local.set({ windowPromptMap: windowPromptMap });
+        
+        foundAutoPrompt = true;
+      }
+    } catch (error) {
+      console.error('[RTool] Error checking auto prompt batches:', error);
+    }
+    
+    // If we didn't find a batch, look for any window with auto-prompt info
+    if (!foundAutoPrompt) {
+      for (let idx in windowPromptMap) {
+        const otherWindowPrompt = windowPromptMap[idx];
+        if (otherWindowPrompt && otherWindowPrompt.isAutoPrompt && !otherWindowPrompt.isManual) {
+          console.log(`[RTool] Found auto-prompt info in window ${idx}, using for window ${windowIndex}`);
+          
+          // This is another window's auto-prompt, so use its base prompt
+          sessionLogs.push({
+            timestamp: timestamp || new Date().toISOString(),
+            userId: userId.value.trim() || '(unknown)',
+            url: siteUrl,
+            windowIndex: windowIndex,
+            basePrompt: otherWindowPrompt.basePrompt, // Use the other window's base prompt
+            transform: otherWindowPrompt.transform || 'none:none', // Use the transform if available
+            prompt: prompt || otherWindowPrompt.transformedPrompt || otherWindowPrompt.basePrompt,
+            response: response,
+            responseId: responseId,
+            sharedAutoPromptId: otherWindowPrompt.sharedAutoPromptId,
+            isManual: false, // Mark as auto-prompt, not manual
+            isAutoPrompt: true,
+            success: true
+          });
+          
+          // Store this info for future reference
+          windowPromptMap[windowIndex] = {
+            basePrompt: otherWindowPrompt.basePrompt,
+            transformedPrompt: prompt || otherWindowPrompt.transformedPrompt || otherWindowPrompt.basePrompt,
+            transform: otherWindowPrompt.transform || 'none:none',
+            isManual: false,
+            isAutoPrompt: true,
+            sharedAutoPromptId: otherWindowPrompt.sharedAutoPromptId,
+            timestamp: otherWindowPrompt.timestamp || new Date().toISOString()
+          };
+          
+          // Save the updated window prompt map
+          await chrome.storage.local.set({ windowPromptMap: windowPromptMap });
+          
+          foundAutoPrompt = true;
+          break;
+        }
+      }
+    }
+      
+      if (!foundAutoPrompt) {
+        // STEP 4.4: Fallback case - create a generic entry
+        // Check if this is likely a manual prompt based on content
+        const isLikelyManual = prompt && !prompt.includes('transform') && windowIndex > 0;
+        const isManualResponse = !prompt || isLikelyManual;
+        const basePromptText = isManualResponse ? 'Manual Prompt' : (prompt || 'Unknown Prompt');
+        const promptText = prompt || 'Unknown Prompt';
+        
+        sessionLogs.push({
+          timestamp: timestamp || new Date().toISOString(),
+          userId: userId.value.trim() || '(unknown)',
+          url: siteUrl,
+          windowIndex: windowIndex,
+          basePrompt: basePromptText,
+          transform: 'none:none',
+          prompt: promptText,
+          response: response,
+          responseId: responseId,
+          isManual: isManualResponse,
+          isAutoPrompt: false,
+          success: true
+        });
+        
+        console.log(`[RTool] Created generic fallback entry for window ${windowIndex}, isManual: ${isManualResponse}`);
+      }
     }
     
     // Save to storage
@@ -819,4 +1746,70 @@ promptInput.addEventListener('keypress', (e) => {
     }
   }
 });
+
+// Clear log buffer on startup
+async function clearLogBufferOnStartup() {
+  try {
+    const clearOnStartup = await chrome.storage.local.get('clearLogsOnStartup');
+    
+    // Default to true if not set
+    const shouldClear = clearOnStartup.clearLogsOnStartup !== false;
+    
+    if (shouldClear) {
+      console.log('[RTool] Clearing log buffer on startup');
+      
+      // Clear all logs and tracking variables
+      sessionLogs = [];
+      windowPromptMap = {};
+      nextResponseId = 1;
+      
+      // Save empty logs to storage
+      await chrome.storage.local.set({ 
+        sessionLogs: [],
+        windowPromptMap: {}, // Clear window prompt map too
+        // Store the preference to clear logs on startup
+        clearLogsOnStartup: true
+      });
+      
+      console.log('[RTool] Log buffer cleared on startup');
+    } else {
+      console.log('[RTool] Keeping existing logs on startup (clearLogsOnStartup is disabled)');
+    }
+  } catch (error) {
+    console.error('[RTool] Error clearing log buffer on startup:', error);
+  }
+}
+
+// Initialize on page load
+(async function initialize() {
+  try {
+    // First clear the log buffer if enabled
+    await clearLogBufferOnStartup();
+    
+    // Load stored window prompt map if available
+    try {
+      const data = await chrome.storage.local.get('windowPromptMap');
+      if (data.windowPromptMap && Object.keys(data.windowPromptMap).length > 0) {
+        console.log('[RTool] Loaded stored window prompt map');
+        // Merge with any existing data
+        windowPromptMap = {...windowPromptMap, ...data.windowPromptMap};
+      }
+    } catch (e) {
+      console.error('[RTool] Error loading window prompt map:', e);
+    }
+    
+    // Then load settings and configuration
+    await loadUserSettings();
+    await loadLoggingConfig();
+    await loadWindows();
+    
+    // Start monitoring conversations
+    chrome.runtime.sendMessage({ action: 'startMonitoring' });
+    
+    updateStatus('Ready. Open windows to begin.', 'normal');
+  } catch (error) {
+    console.error('Initialization error:', error);
+    updateStatus('Error initializing extension', 'error');
+  }
+})();
 

@@ -18,9 +18,29 @@
   "action": {
     "default_title": "RTool - Click to open control panel"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*",
+        "https://grok.x.com/*",
+        "https://x.com/i/grok/*"
+      ],
+      "js": [
+        "site-configs.js",
+        "content-extraction.js",
+        "gemini-extraction.js",
+        "content.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
   "web_accessible_resources": [
     {
-      "resources": ["site-configs.js"],
+      "resources": ["site-configs.js", "gemini-extraction.js"],
       "matches": ["<all_urls>"]
     }
   ],

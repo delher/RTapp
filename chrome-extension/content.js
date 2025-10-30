@@ -1,32 +1,98 @@
 // Content script that runs in each opened window
 // Handles prompt injection, transformation, and conversation monitoring
 
-console.log('=== RTOOL CONTENT SCRIPT LOADED ===');
-console.log('[RTool] Content script loaded at:', new Date().toISOString());
-console.log('[RTool] Running on URL:', window.location.href);
-console.log('[RTool] Document ready state:', document.readyState);
+// VERSION: 1.3.8 - Removed waitingForResponse check from manual prompt detection
+var CONTENT_SCRIPT_VERSION = window.CONTENT_SCRIPT_VERSION || '1.3.8';
+window.CONTENT_SCRIPT_VERSION = CONTENT_SCRIPT_VERSION;
 
-// Test basic functionality
-try {
-  console.log('[RTool] Basic DOM access test:', document.body ? 'OK' : 'FAILED');
-} catch (e) {
-  console.error('[RTool] DOM access error:', e);
+console.log('[RTool] ========== CONTENT SCRIPT STARTING ==========');
+console.log(`[RTool] Content script version: ${CONTENT_SCRIPT_VERSION}`);
+console.log('[RTool] Script execution context:', typeof window, typeof document);
+console.log('[RTool] Current window.RTOOL_INITIALIZED:', window.RTOOL_INITIALIZED);
+console.log('[RTool] Current window.RTOOL_LOADED:', window.RTOOL_LOADED);
+console.log('[RTool] Current window.RTOOL_VERSION:', window.RTOOL_VERSION);
+
+// Check if already initialized BEFORE doing anything
+var wasInitialized = window.RTOOL_INITIALIZED === true;
+
+// ALWAYS set these flags (even on re-load)
+console.log('[RTool] Setting window.RTOOL_LOADED = true...');
+window.RTOOL_LOADED = true;
+console.log('[RTool] After setting, window.RTOOL_LOADED =', window.RTOOL_LOADED);
+
+console.log(`[RTool] Setting window.RTOOL_VERSION = ${CONTENT_SCRIPT_VERSION}...`);
+window.RTOOL_VERSION = CONTENT_SCRIPT_VERSION;
+console.log('[RTool] After setting, window.RTOOL_VERSION =', window.RTOOL_VERSION);
+
+console.log('[RTool] Setting window.RTOOL_INITIALIZED = true...');
+window.RTOOL_INITIALIZED = true;
+console.log('[RTool] After setting, window.RTOOL_INITIALIZED =', window.RTOOL_INITIALIZED);
+
+// Only log initialization messages on first load
+if (!wasInitialized) {
+  console.log('=== RTOOL CONTENT SCRIPT LOADED (FIRST TIME) ===');
+  console.log('[RTool] Content script loaded at:', new Date().toISOString());
+  console.log('[RTool] Running on URL:', window.location.href);
+  console.log('[RTool] Document ready state:', document.readyState);
+
+  // Test basic functionality
+  try {
+    console.log('[RTool] Basic DOM access test:', document.body ? 'OK' : 'FAILED');
+  } catch (e) {
+    console.error('[RTool] DOM access error:', e);
+  }
+} else {
+  console.warn('[RTool] content.js already initialized, skipping initialization logs');
 }
 
-// State for conversation monitoring
-let conversationObserver = null;
-let lastPrompt = null;
-let lastResponse = null;
-let windowIndex = null;
-let isMonitoring = false;
-let responseDebounceTimer = null;
-let pendingResponse = null;
-let isLoggingResponse = false; // Prevent concurrent logging
-let lastResponseTime = 0; // Track when response was last updated
-let currentSiteKey = null;  // Current site configuration key
-let currentSiteConfig = null;  // Current site configuration object
+console.log('[RTool] ========== CONTENT SCRIPT INITIALIZATION COMPLETE ==========');
 
-// Listen for messages from background script
+// State for conversation monitoring (use var to allow re-declaration)
+var conversationObserver = window.conversationObserver || null;
+
+// Clean up lastPrompt if it contains garbage from previous page state
+var lastPrompt = window.lastPrompt || null;
+// CRITICAL: Always clear lastPrompt on initialization to prevent garbage from persisting
+// This is especially important for ChatGPT which can have script tags in the DOM
+console.log('[RTool] Initialization: lastPrompt =', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
+if (lastPrompt && (
+  lastPrompt.includes('window.__oai_') ||
+  lastPrompt.includes('Date.now') ||
+  lastPrompt.includes('requestAnimationFrame') ||
+  (lastPrompt.includes('window.') && lastPrompt.includes('('))
+)) {
+  console.log('[RTool] ⚠️ Clearing garbage from lastPrompt:', lastPrompt.substring(0, 50));
+  lastPrompt = null;
+  window.lastPrompt = null;
+}
+// EXTRA SAFETY: For ChatGPT, always start with NULL to prevent any garbage
+if (window.location.href.includes('chatgpt.com')) {
+  console.log('[RTool] ChatGPT detected - forcing lastPrompt to NULL for safety');
+  lastPrompt = null;
+  window.lastPrompt = null;
+}
+
+var lastResponse = window.lastResponse || null;
+var windowIndex = window.windowIndex || null;
+var isMonitoring = window.isMonitoring || false;
+var responseDebounceTimer = window.responseDebounceTimer || null;
+var pendingResponse = window.pendingResponse || null;
+var isLoggingResponse = window.isLoggingResponse || false; // Prevent concurrent logging
+var lastResponseTime = window.lastResponseTime || 0; // Track when response was last updated
+var currentSiteKey = window.currentSiteKey || null;  // Current site configuration key
+var currentSiteConfig = window.currentSiteConfig || null;  // Current site configuration object
+var responseHistory = window.responseHistory || []; // Track response history to prevent duplicates
+var lastLoggedResponseTime = window.lastLoggedResponseTime || 0; // Track when we last logged a response
+var responseStableCount = window.responseStableCount || 0; // Counter for stable response detection
+
+// NEW: Robust prompt tracking for ChatGPT
+// This prevents DOM garbage from corrupting the prompt
+var injectedPrompt = window.injectedPrompt || null; // The prompt that was injected via RTool
+var injectedPromptTimestamp = window.injectedPromptTimestamp || 0; // When it was injected
+var waitingForResponse = window.waitingForResponse || false; // Are we waiting for a response to the injected prompt?
+
+// Listen for messages from background script (guard against duplicate listeners)
+if (!window.RTOOL_MESSAGE_LISTENER_ADDED) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('[RTool] Content script received message:', request.action, 'at', new Date().toISOString());
 
@@ -60,8 +126,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[RTool] Stopping conversation monitoring');
     stopConversationMonitoring();
     sendResponse({ success: true });
+  } else if (request.action === 'debugDOM') {
+    console.log('[RTool] Received debugDOM request');
+    debugDOM();
+    sendResponse({ success: true });
   }
 });
+window.RTOOL_MESSAGE_LISTENER_ADDED = true;
+}
 
 // Inject and submit prompt
 async function injectPrompt(rawPrompt, transform) {
@@ -72,6 +144,26 @@ async function injectPrompt(rawPrompt, transform) {
     // Apply transform
     const prompt = applyTransform(rawPrompt, transform);
     console.log(`[RTool] Transformed prompt (${transform.category}:${transform.method}):`, prompt);
+    
+    // CRITICAL: Set injected prompt tracking BEFORE injection
+    // This prevents DOM garbage from corrupting our prompt tracking
+    injectedPrompt = prompt;
+    injectedPromptTimestamp = Date.now();
+    waitingForResponse = true;
+    lastPrompt = prompt; // Also set lastPrompt for compatibility
+    
+    // Store in window for persistence
+    window.injectedPrompt = injectedPrompt;
+    window.injectedPromptTimestamp = injectedPromptTimestamp;
+    window.waitingForResponse = waitingForResponse;
+    window.lastPrompt = lastPrompt;
+    
+    // CRITICAL: Block manual prompt captures while waiting for auto-prompt response
+    // This prevents garbage from overwriting the correct auto-prompt info
+    window.blockManualPromptCapture = true;
+    console.log(`[RTool] [Window ${windowIndex}] BLOCKING manual prompt capture until auto-prompt response received`);
+    
+    console.log(`[RTool] [Window ${windowIndex}] Set injected prompt tracking:`, prompt.substring(0, 50));
     
     // Find input field
     const input = document.querySelector('#prompt-textarea') || 
@@ -144,8 +236,8 @@ async function injectPrompt(rawPrompt, transform) {
   }
 }
 
-// Parseltongue transforms (same as Electron app)
-const transforms = {
+// Parseltongue transforms (same as Electron app) (use var to allow re-declaration)
+var transforms = window.rtoolTransforms || {
   encoding: {
     'base64': (text) => btoa(unescape(encodeURIComponent(text))),
     'hex': (text) => Array.from(text).map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''),
@@ -235,6 +327,9 @@ const transforms = {
   }
 };
 
+// Store transforms in window for reuse
+window.rtoolTransforms = transforms;
+
 // Apply transform
 function applyTransform(text, transform) {
   if (!transform || transform.category === 'none' || transform.method === 'none') {
@@ -259,11 +354,36 @@ function applyTransform(text, transform) {
 // Start monitoring conversation for manual interactions
 function startConversationMonitoring() {
   console.log('[RTool] startConversationMonitoring called');
-  if (isMonitoring) {
+  if (isMonitoring || window.isMonitoring === true) {
     console.log('[RTool] Already monitoring, skipping');
     return;
   }
+  
+  // CRITICAL: Ensure DOM is ready before starting monitoring
+  if (!document.body) {
+    console.warn('[RTool] DOM not ready (no body), waiting for DOMContentLoaded...');
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('[RTool] DOM ready, starting monitoring now');
+      startConversationMonitoring();
+    });
+    return;
+  }
+  
+  // EXTRA SAFETY: For ChatGPT, ensure main element exists
+  if (window.location.href.includes('chatgpt.com')) {
+    const main = document.querySelector('main');
+    if (!main) {
+      console.warn('[RTool] ChatGPT main element not found, waiting 500ms...');
+      setTimeout(() => {
+        console.log('[RTool] Retrying monitoring after delay');
+        startConversationMonitoring();
+      }, 500);
+      return;
+    }
+  }
+  
   isMonitoring = true;
+  window.isMonitoring = true;
   console.log('[RTool] Starting conversation monitoring');
 
   // Also monitor for user input submissions (manual prompts)
@@ -275,11 +395,21 @@ function startConversationMonitoring() {
 
   conversationObserver = new MutationObserver((mutations) => {
     console.log(`[RTool] MutationObserver fired: ${mutations.length} mutations`);
+    
+    // CRITICAL: Don't try to extract if DOM is not ready
+    if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
+      console.log(`[RTool] [Window ${windowIndex}] DOM not ready (${document.readyState}), skipping`);
+      return;
+    }
+    
     // Look for new conversation items
     const messages = extractConversationMessages();
 
     if (messages.length === 0) {
-      console.log('[RTool] No messages found, skipping');
+      console.log(`[RTool] [Window ${windowIndex}] ⚠️ No messages found, skipping`);
+      console.log(`[RTool] [Window ${windowIndex}] Current URL:`, window.location.href);
+      console.log(`[RTool] [Window ${windowIndex}] Is this a conversation page?`, window.location.href.includes('/c/'));
+      console.log(`[RTool] [Window ${windowIndex}] Document ready state:`, document.readyState);
       return; // No messages found, skip
     }
 
@@ -287,70 +417,248 @@ function startConversationMonitoring() {
     console.log('[RTool] Found', messages.length, 'messages. Latest:', latest.role, '(' + latest.content.length + ' chars)');
     console.log('[RTool] Latest content preview:', latest.content.substring(0, 80));
     console.log('[RTool] Current lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
+    
+    // Filter out UI elements and garbage content
+    const uiPatterns = [
+      'Get Plus',
+      'ChatGPT said:',
+      'You said:',
+      'Temporary Chat',
+      'window.__oai_',
+      'requestAnimationFrame',
+      "won't appear in history",
+      'What can I help with?',
+      'How can I help',
+      'Get GPT',
+      'Upgrade',
+      'limit for GPT',
+      '__oai_logHTML',
+      '__oai_SSR_HTML',
+      '__oai_logTTI',
+      '__oai_SSR_TTI',
+      'window.__oai_logHTML?window.__oai_logHTML()',
+      'Date.now()',
+      'window.__oai'
+    ];
+    
+    const contentLower = latest.content.toLowerCase();
+    const isUIElement = uiPatterns.some(pattern => contentLower.includes(pattern.toLowerCase()));
+    
+    // Also check if content looks like a script tag or code
+    // More aggressive detection: if it has window. and parentheses, it's likely code
+    const looksLikeCode = (latest.content.includes('window.') && latest.content.includes('(')) ||
+                          (latest.content.includes('window.') && latest.content.includes('function')) ||
+                          (latest.content.includes('__oai_')) ||
+                          (latest.content.includes('Date.now'));
+    
+    if (isUIElement || looksLikeCode) {
+      console.log('[RTool] Skipping UI element or page content:', latest.content.substring(0, 100));
+      return;
+    }
 
+    // CRITICAL: Before processing, check if lastPrompt contains garbage and clear it
+    if (lastPrompt && (
+      lastPrompt.includes('window.__oai_') ||
+      lastPrompt.includes('Date.now') ||
+      lastPrompt.includes('requestAnimationFrame') ||
+      (lastPrompt.includes('window.') && lastPrompt.includes('('))
+    )) {
+      console.log(`[RTool] [Window ${windowIndex}] ⚠️ CLEARING garbage from lastPrompt:`, lastPrompt.substring(0, 50));
+      lastPrompt = null;
+      window.lastPrompt = null;
+    }
+    
     // Check if it's a new prompt or response
     if (latest.role === 'user' && latest.content !== lastPrompt) {
-      // Check if this prompt was already captured by input monitoring
-      const wasCapturedByInput = window.lastCapturedPrompt === latest.content;
-      if (wasCapturedByInput) {
-        console.log('[RTool] User prompt already captured by input monitoring, skipping DOM detection');
-        lastPrompt = latest.content; // Still set for response association
-      } else {
-        console.log('[RTool] ✓ Detected NEW manual prompt from DOM:', latest.content.substring(0, 100));
-        lastPrompt = latest.content;
-        // Reset response state for new prompt
-        lastResponse = null;
-        pendingResponse = null;
-        isLoggingResponse = false;
-        lastResponseTime = 0; // Reset response timing
-        if (responseDebounceTimer) {
-          clearTimeout(responseDebounceTimer);
-          responseDebounceTimer = null;
+      // If an auto-prompt response is in progress and substantial, flush it now
+      if (currentSiteKey === 'chatgpt' && waitingForResponse && injectedPrompt && pendingResponse) {
+        const minAutoLen = 50;
+        if (!isLoggingResponse && pendingResponse.length >= minAutoLen) {
+          console.log(`[RTool] [Window ${windowIndex}] Flushing in-progress AUTO response before manual prompt`);
+          logCompletedResponse(pendingResponse);
         }
       }
+      // FOR CHATGPT: If waiting for an auto-prompt response, only ignore if the DOM-detected
+      // prompt is exactly the injected one. If it's different, treat it as a manual prompt.
+      if (currentSiteKey === 'chatgpt' && waitingForResponse && injectedPrompt) {
+        if (latest.content === injectedPrompt) {
+          console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Ignoring DOM-detected injected prompt (already tracked)`);
+          if (!lastPrompt || lastPrompt === 'NULL') {
+            lastPrompt = injectedPrompt;
+            window.lastPrompt = injectedPrompt;
+          }
+          return;
+        } else {
+          console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] DOM-detected prompt differs from injected; will handle as manual`);
+        }
+      }
+      
+      // CRITICAL: Double-check that this isn't garbage before setting lastPrompt
+      const isGarbage = (latest.content.includes('window.__oai_') ||
+                        latest.content.includes('Date.now') ||
+                        latest.content.includes('requestAnimationFrame') ||
+                        (latest.content.includes('window.') && latest.content.includes('(')));
+      
+      if (isGarbage) {
+        console.log('[RTool] ⚠️ BLOCKED attempt to set lastPrompt to garbage:', latest.content.substring(0, 100));
+        return; // Don't set lastPrompt to garbage
+      }
+      
+      console.log('[RTool] ✓ Detected NEW user prompt from DOM:', latest.content.substring(0, 100));
+      
+      // ========== CRITICAL: DETECT MANUAL PROMPTS FROM DOM ==========
+      // This is the key fix - detect manual prompts when they appear in the DOM
+      // Check if this is a MANUAL prompt (not the auto-prompt we injected)
+      
+      // CRITICAL: Check if this prompt is the same as lastPrompt BEFORE updating lastPrompt
+      // If it is, it means we already processed it (either as auto or manual)
+      // Don't process it again to avoid duplicates
+      const isNewPrompt = (lastPrompt !== latest.content);
+      
+      // Now set lastPrompt for future comparisons
+      lastPrompt = latest.content;
+      
+      // Reset response state for new prompt
+      lastResponse = null;
+      pendingResponse = null;
+      isLoggingResponse = false;
+      lastResponseTime = 0; // Reset response timing
+      if (responseDebounceTimer) {
+        clearTimeout(responseDebounceTimer);
+        responseDebounceTimer = null;
+      }
+      
+      // CRITICAL: Determine if this is a manual prompt
+      // A prompt is manual if:
+      // 1. It's new (not already processed)
+      // 2. It's not the auto-prompt we injected
+      // 3. We're on ChatGPT
+      // NOTE: We DON'T check waitingForResponse here because if the user types a manual prompt
+      // while waiting for an auto-prompt response, we still want to detect it!
+      const isManualPrompt = (
+        isNewPrompt &&  // Must be a NEW prompt we haven't seen
+        latest.content !== injectedPrompt &&  // Not the auto-prompt we injected
+        currentSiteKey === 'chatgpt'  // Only for ChatGPT (Gemini uses input monitoring)
+      );
+      
+      if (isManualPrompt) {
+        console.log(`[RTool] [Window ${windowIndex}] 🔍 DETECTED NEW MANUAL PROMPT FROM DOM:`, latest.content.substring(0, 50));
+        console.log(`[RTool] [Window ${windowIndex}] Manual prompt detection state: waitingForResponse=${waitingForResponse}, injectedPrompt=${injectedPrompt ? injectedPrompt.substring(0, 30) : 'NULL'}`);
+        
+        // Call captureManualPrompt to send it to the popup for logging
+        captureManualPrompt(latest.content);
+      } else {
+        if (!isNewPrompt) {
+          console.log(`[RTool] [Window ${windowIndex}] User prompt already processed (lastPrompt matches), skipping`);
+        } else {
+          console.log(`[RTool] [Window ${windowIndex}] User prompt detected but NOT manual (waitingForResponse=${waitingForResponse}, isInjected=${latest.content === injectedPrompt})`);
+        }
+      }
+      // ==============================================================
     } else if (latest.role === 'assistant') {
-      console.log('[RTool] Assistant response detected, lastPrompt:', lastPrompt ? lastPrompt.substring(0, 50) : 'NULL');
+      // FOR CHATGPT: Use injected prompt if we're waiting for a response
+      const effectivePrompt = (currentSiteKey === 'chatgpt' && waitingForResponse && injectedPrompt) 
+        ? injectedPrompt 
+        : lastPrompt;
+      
+      console.log(`[RTool] [Window ${windowIndex}] Assistant response detected, effectivePrompt:`, effectivePrompt ? effectivePrompt.substring(0, 50) : 'NULL');
+      
       // Skip if we're already logging this response
       if (isLoggingResponse) {
         console.log('[RTool] Skipping: already logging');
         return;
       }
-
+      
+      // Skip if we've logged a response very recently (within 3 seconds)
+      const timeSinceLastLog = Date.now() - lastLoggedResponseTime;
+      if (lastLoggedResponseTime > 0 && timeSinceLastLog < 3000) {
+        console.log(`[RTool] Skipping: logged another response ${timeSinceLastLog}ms ago`);
+        return;
+      }
+      
       const currentTime = Date.now();
-
-      // Always update pending response if content changed
+      
+      // Update pending response if content changed
       if (latest.content !== pendingResponse) {
-        console.log('[RTool] ✓ Detected assistant response update at', currentTime);
+        console.log('[RTool] ✓ Detected new assistant response at', currentTime);
         pendingResponse = latest.content;
         lastResponseTime = currentTime;
+        responseStableCount = 0; // Reset stability counter
       } else {
-        console.log('[RTool] Assistant response unchanged, checking completion');
+        // Same content as before - increment stability counter
+        responseStableCount++;
+        console.log(`[RTool] Response unchanged (stability count: ${responseStableCount}), checking completion`);
       }
-
+      
       // Clear existing timer
       if (responseDebounceTimer) {
         clearTimeout(responseDebounceTimer);
       }
-
+      
       // Check if response is complete
       const isComplete = isResponseComplete();
-
-      if (isComplete) {
-        // Log immediately if we detect completion
-        console.log('[RTool] Response complete (detected completion indicator)');
+      
+      // For Gemini, we need more checks to ensure we're not logging fragments
+      const isGemini = currentSiteKey === 'gemini';
+      const minResponseLength = isGemini ? 300 : 100; // More strict minimum length
+      const isResponseSubstantial = pendingResponse && pendingResponse.length > minResponseLength;
+      const isResponseStable = responseStableCount >= (isGemini ? 5 : 3); // Require more stability
+      
+      // Log immediately if we detect completion AND the response is substantial
+      // For ChatGPT, we can trust the completion buttons, so we don't need to wait for stability
+      console.log(`[RTool] [Window ${windowIndex}] Completion check: isComplete=${isComplete}, isSubstantial=${isResponseSubstantial} (len=${pendingResponse?.length}), stableCount=${responseStableCount}`);
+      if (isComplete && isResponseSubstantial && (currentSiteKey === 'chatgpt' || responseStableCount >= 2)) {
+        console.log('[RTool] Response complete (detected completion indicator), substantial, and stable enough');
         logCompletedResponse(pendingResponse);
-      } else {
-        // Wait longer for Gemini responses - they can be quite long
-        const debounceTime = currentSiteKey === 'gemini' ? 8000 : 5000;
+      } 
+      // Also log if response is VERY stable (seen multiple times unchanged) and substantial
+      else if (isResponseStable && isResponseSubstantial) {
+        console.log(`[RTool] Response very stable (${responseStableCount} unchanged observations) and substantial`);
+        logCompletedResponse(pendingResponse);
+      }
+      else {
+        // Wait much longer for Gemini responses
+        const debounceTime = isGemini ? 15000 : 8000; // Longer initial debounce
         responseDebounceTimer = setTimeout(() => {
           if (pendingResponse && !isLoggingResponse) {
-            // Double-check that no updates happened in the last 2 seconds
+            // Double-check that no updates happened in the last 5 seconds
             const timeSinceLastUpdate = Date.now() - lastResponseTime;
-            if (timeSinceLastUpdate >= 2000) {
+            if (timeSinceLastUpdate >= 5000 && isResponseSubstantial) {
               console.log(`[RTool] Response complete (no changes for ${debounceTime/1000}s, stable for ${timeSinceLastUpdate/1000}s)`);
-              logCompletedResponse(pendingResponse);
+              
+              // For Gemini, wait even longer for very short responses
+              if (isGemini && pendingResponse.length < 500) {
+                console.log('[RTool] Short Gemini response, waiting longer to ensure completion');
+                // Set another timeout for short responses
+                responseDebounceTimer = setTimeout(() => {
+                  if (pendingResponse && !isLoggingResponse) {
+                    // Only log if it's still the same response after additional wait
+                    const finalTimeSinceUpdate = Date.now() - lastResponseTime;
+                    if (finalTimeSinceUpdate >= 8000) {
+                      console.log('[RTool] Short response stable for extended period, logging');
+                      logCompletedResponse(pendingResponse);
+                    }
+                  }
+                }, 5000);
+              } else {
+                // For longer responses or non-Gemini, log now
+                logCompletedResponse(pendingResponse);
+              }
             } else {
-              console.log(`[RTool] Response still updating (${timeSinceLastUpdate/1000}s since last change), waiting longer`);
+              console.log(`[RTool] Response still updating or not substantial, waiting longer`);
+              // Set another timeout to check again later
+              responseDebounceTimer = setTimeout(() => {
+                if (pendingResponse && !isLoggingResponse && pendingResponse.length > minResponseLength) {
+                  // Final check - only log if stable for at least 3 seconds
+                  const finalTimeSinceUpdate = Date.now() - lastResponseTime;
+                  if (finalTimeSinceUpdate >= 3000) {
+                    console.log('[RTool] Final timeout reached, response stable, logging');
+                    logCompletedResponse(pendingResponse);
+                  } else {
+                    console.log('[RTool] Response still changing at final timeout, not logging');
+                  }
+                }
+              }, 8000);
             }
           }
         }, debounceTime);
@@ -359,45 +667,198 @@ function startConversationMonitoring() {
   });
 
   conversationObserver.observe(targetNode, config);
+  window.conversationObserver = conversationObserver;
   console.log('[RTool] Conversation monitoring started');
 }
 
 // Monitor user input submissions (for manual prompts not detected by DOM)
 function setupUserInputMonitoring() {
-  console.log('[RTool] Setting up user input monitoring');
+  console.log('[RTool] Setting up user input monitoring for window:', windowIndex);
+  
+  // CRITICAL: For ChatGPT, DISABLE input monitoring - use DOM-based detection only
+  // Input monitoring is unreliable for ChatGPT's dynamic UI
+  if (currentSiteKey === 'chatgpt') {
+    console.log('[RTool] ⚠️ SKIPPING input monitoring for ChatGPT - using DOM-based detection only');
+    return;
+  }
 
-  // Find common input elements
+  // Find common input elements with broader selectors for all sites
   const inputSelectors = [
+    // Standard input elements
     'textarea',
     'input[type="text"]',
     '[contenteditable="true"]',
     '[role="textbox"]',
+    
+    // Editor-specific elements
     '.ql-editor',  // Quill editor
-    '.ProseMirror'  // ProseMirror editor
+    '.ProseMirror',  // ProseMirror editor
+    
+    // Gemini-specific selectors
+    '[class*="input-area"]',
+    '[class*="prompt-area"]',
+    '[class*="textarea"]',
+    '[class*="input-box"]',
+    '[class*="query-input"]',
+    
+    // ChatGPT-specific selectors
+    '#prompt-textarea',
+    '[data-id="root"]',
+    '[data-id="chat-input"]',
+    
+    // Claude-specific selectors
+    '[class*="claude"]',
+    '[class*="chat-input"]',
+    
+    // Generic selectors that might catch inputs
+    'form textarea',
+    'form [contenteditable]',
+    'form [role="textbox"]',
+    'div[class*="input"]',
+    'div[class*="composer"]'
   ];
 
   const inputElements = [];
   inputSelectors.forEach(selector => {
-    const elements = document.querySelectorAll(selector);
-    elements.forEach(el => {
-      if (!inputElements.includes(el)) {
-        inputElements.push(el);
-      }
-    });
+    try {
+      const elements = document.querySelectorAll(selector);
+      elements.forEach(el => {
+        if (!inputElements.includes(el)) {
+          inputElements.push(el);
+        }
+      });
+    } catch (e) {
+      console.warn(`[RTool] Error finding inputs with selector ${selector}:`, e);
+    }
   });
 
   console.log(`[RTool] Found ${inputElements.length} potential input elements`);
 
+  // If no input elements found, try a more aggressive approach
+  if (inputElements.length === 0) {
+    console.log('[RTool] No input elements found, trying broader approach');
+    
+    // Look for any element that might be an input container
+    const possibleContainers = document.querySelectorAll('div[role="main"] div, main div, [class*="chat"] div');
+    possibleContainers.forEach(container => {
+      // Check if it looks like an input area (near bottom of page, has child inputs)
+      const rect = container.getBoundingClientRect();
+      const isNearBottom = rect.bottom > window.innerHeight - 300; // More generous bottom margin
+      const hasInputLikeChildren = container.querySelector('textarea, [contenteditable], [role="textbox"]');
+      
+      if (isNearBottom && (hasInputLikeChildren || container.getAttribute('contenteditable') === 'true')) {
+        inputElements.push(container);
+        console.log('[RTool] Found potential input container:', container);
+      }
+    });
+  }
+  
+  // CRITICAL: If we still have no input elements, add a global mutation observer
+  // to watch for input elements that might be added dynamically
+  if (inputElements.length === 0) {
+    console.log('[RTool] No input elements found, setting up mutation observer for inputs');
+    
+    // Set up a mutation observer to watch for new input elements
+    const inputObserver = new MutationObserver((mutations) => {
+      let newInputsFound = false;
+      
+      mutations.forEach(mutation => {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach(node => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              // Check if the added node is an input element
+              if (node.tagName === 'TEXTAREA' || 
+                  node.tagName === 'INPUT' ||
+                  node.getAttribute('contenteditable') === 'true' ||
+                  node.getAttribute('role') === 'textbox') {
+                
+                if (!inputElements.includes(node)) {
+                  inputElements.push(node);
+                  setupInputMonitoring(node);
+                  newInputsFound = true;
+                  console.log('[RTool] Found new input element via mutation:', node);
+                }
+              }
+              
+              // Also check children of added nodes
+              const childInputs = node.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]');
+              childInputs.forEach(input => {
+                if (!inputElements.includes(input)) {
+                  inputElements.push(input);
+                  setupInputMonitoring(input);
+                  newInputsFound = true;
+                  console.log('[RTool] Found new child input element via mutation:', input);
+                }
+              });
+            }
+          });
+        }
+      });
+      
+      if (newInputsFound) {
+        console.log(`[RTool] Updated input elements count: ${inputElements.length}`);
+      }
+    });
+    
+    // Start observing the document with the configured parameters
+    inputObserver.observe(document.body, { childList: true, subtree: true });
+    console.log('[RTool] Input mutation observer started');
+  }
+
+  // Set up document-wide monitoring for Gemini
+  if (currentSiteKey === 'gemini') {
+    console.log('[RTool] Setting up document-wide monitoring for Gemini');
+    
+    // Monitor all clicks on the document
+    document.addEventListener('click', (event) => {
+      // Look for click on or near send buttons
+      const target = event.target;
+      const isSendButton = 
+        (target.tagName === 'BUTTON' && 
+         (target.textContent?.toLowerCase().includes('send') || 
+          target.getAttribute('aria-label')?.toLowerCase().includes('send'))) ||
+        target.closest('button[aria-label*="send" i]') ||
+        target.closest('button[title*="send" i]') ||
+        target.closest('button[aria-label*="submit" i]');
+      
+      if (isSendButton) {
+        console.log('[RTool] Send button clicked (document monitor)');
+        
+        // Find the closest input element
+        const nearbyInputs = inputElements.filter(input => {
+          const inputRect = input.getBoundingClientRect();
+          const clickY = event.clientY;
+          // Input should be above the click and within 200px vertically
+          return inputRect.bottom < clickY && clickY - inputRect.bottom < 200;
+        });
+        
+        if (nearbyInputs.length > 0) {
+          // Use the closest input above the click
+          const input = nearbyInputs[0];
+          const inputText = getInputText(input);
+          if (inputText && inputText.trim().length > 0) {
+            console.log('[RTool] Captured manual prompt from document monitor:', inputText.substring(0, 50));
+            captureManualPrompt(inputText.trim());
+          }
+        } else {
+          console.log('[RTool] Send button clicked but no input found nearby');
+        }
+      }
+    });
+  }
+
+  // Monitor each input element individually
   inputElements.forEach((input, index) => {
     console.log(`[RTool] Monitoring input ${index}:`, input.tagName, input.className);
 
     // Monitor for Enter key presses
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
-        console.log('[RTool] Enter key detected in input');
+        console.log(`[RTool] [Window ${windowIndex}] Enter key detected in input`);
+        console.log(`[RTool] [Window ${windowIndex}] blockManualPromptCapture flag at Enter time:`, window.blockManualPromptCapture);
         const inputText = getInputText(input);
         if (inputText && inputText.trim().length > 0) {
-          console.log('[RTool] Captured manual prompt from input:', inputText.substring(0, 50));
+          console.log(`[RTool] [Window ${windowIndex}] Captured prompt from Enter key:`, inputText.substring(0, 50));
           captureManualPrompt(inputText.trim());
         }
       }
@@ -417,16 +878,54 @@ function setupUserInputMonitoring() {
     }
 
     // Monitor for send button clicks near the input
-    const sendButtons = input.parentElement?.querySelectorAll('button') || [];
-    sendButtons.forEach(button => {
-      if (button.textContent?.toLowerCase().includes('send') ||
-          button.getAttribute('aria-label')?.toLowerCase().includes('send') ||
-          button.querySelector('[d*="send"]')) {
+    // Look more broadly for buttons - search parent, siblings, and nearby elements
+    const parentElement = input.parentElement;
+    const siblingElements = parentElement ? Array.from(parentElement.children) : [];
+    const nearbyButtons = [];
+    
+    // Add buttons from parent
+    if (parentElement) {
+      const parentButtons = parentElement.querySelectorAll('button');
+      parentButtons.forEach(btn => nearbyButtons.push(btn));
+    }
+    
+    // Add buttons from siblings
+    siblingElements.forEach(sibling => {
+      if (sibling !== input) {
+        const siblingButtons = sibling.querySelectorAll('button');
+        siblingButtons.forEach(btn => nearbyButtons.push(btn));
+      }
+    });
+    
+    // Add buttons from next sibling container (common pattern)
+    const nextContainer = parentElement?.nextElementSibling;
+    if (nextContainer) {
+      const nextButtons = nextContainer.querySelectorAll('button');
+      nextButtons.forEach(btn => nearbyButtons.push(btn));
+    }
+    
+    // Check all found buttons
+    nearbyButtons.forEach(button => {
+      const buttonText = button.textContent?.toLowerCase() || '';
+      const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
+      const title = button.getAttribute('title')?.toLowerCase() || '';
+      
+      // Check for send indicators
+      const isSendButton = 
+        buttonText.includes('send') || 
+        ariaLabel.includes('send') || 
+        title.includes('send') ||
+        buttonText.includes('submit') || 
+        ariaLabel.includes('submit') ||
+        button.querySelector('svg') !== null; // Often send buttons have SVG icons
+      
+      if (isSendButton) {
         button.addEventListener('click', () => {
-          console.log('[RTool] Send button clicked');
+          console.log(`[RTool] [Window ${windowIndex}] Send button clicked near input`);
+          console.log(`[RTool] [Window ${windowIndex}] blockManualPromptCapture flag at click time:`, window.blockManualPromptCapture);
           const inputText = getInputText(input);
           if (inputText && inputText.trim().length > 0) {
-            console.log('[RTool] Captured manual prompt from send button:', inputText.substring(0, 50));
+            console.log(`[RTool] [Window ${windowIndex}] Captured prompt from send button click:`, inputText.substring(0, 50));
             captureManualPrompt(inputText.trim());
           }
         });
@@ -437,29 +936,143 @@ function setupUserInputMonitoring() {
 
 // Get text content from various input types
 function getInputText(input) {
-  if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-    return input.value;
-  } else if (input.getAttribute('contenteditable') === 'true') {
-    return input.textContent || input.innerText;
-  } else if (input.classList.contains('ql-editor') || input.classList.contains('ProseMirror')) {
-    return input.textContent || input.innerText;
+  // Handle null or undefined input
+  if (!input) return '';
+  
+  try {
+    // Standard form elements
+    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+      return input.value || '';
+    } 
+    
+    // ContentEditable elements
+    if (input.getAttribute('contenteditable') === 'true') {
+      return input.textContent || input.innerText || '';
+    } 
+    
+    // Special editor components
+    if (input.classList.contains('ql-editor') || 
+        input.classList.contains('ProseMirror') || 
+        input.getAttribute('role') === 'textbox') {
+      return input.textContent || input.innerText || '';
+    }
+    
+    // For Gemini, check for nested input elements
+    if (currentSiteKey === 'gemini') {
+      // Try to find nested textarea or contenteditable
+      const nestedInput = input.querySelector('textarea, [contenteditable="true"], [role="textbox"]');
+      if (nestedInput) {
+        return nestedInput.value || nestedInput.textContent || nestedInput.innerText || '';
+      }
+      
+      // For Gemini's complex input containers
+      const possibleTextContainers = input.querySelectorAll('div, p, span');
+      for (const container of possibleTextContainers) {
+        const text = container.textContent || container.innerText;
+        if (text && text.trim().length > 0) {
+          return text;
+        }
+      }
+    }
+    
+    // Fallback to any available text content
+    return input.value || input.textContent || input.innerText || '';
+  } catch (e) {
+    console.error('[RTool] Error getting input text:', e);
+    return '';
   }
-  return input.value || input.textContent || input.innerText;
 }
 
 // Capture a manual prompt for logging
 function captureManualPrompt(promptText) {
-  if (promptText === lastPrompt) {
+  console.log(`[RTool] [Window ${windowIndex}] ========== captureManualPrompt called ==========`);
+  console.log(`[RTool] [Window ${windowIndex}] Prompt text:`, promptText ? promptText.substring(0, 50) : 'NULL');
+  console.log(`[RTool] [Window ${windowIndex}] blockManualPromptCapture flag:`, window.blockManualPromptCapture);
+  
+  // CRITICAL: If we're blocking manual capture due to an auto-prompt, still allow
+  // capture when the prompt text is different from the injected auto-prompt.
+  if (window.blockManualPromptCapture === true) {
+    if (promptText && injectedPrompt && promptText !== injectedPrompt) {
+      console.log(`[RTool] [Window ${windowIndex}] ⚠️ Manual capture unblocked for different prompt while auto pending`);
+    } else {
+      console.log(`[RTool] [Window ${windowIndex}] ⚠️ BLOCKED manual prompt capture - waiting for auto-prompt response`);
+      console.log(`[RTool] [Window ${windowIndex}] Blocked prompt was:`, promptText.substring(0, 50));
+      return;
+    }
+  }
+  
+  console.log(`[RTool] [Window ${windowIndex}] ✓ Manual prompt capture NOT blocked, proceeding...`);
+  
+  // Validate prompt text
+  if (!promptText || typeof promptText !== 'string' || promptText.trim().length === 0) {
+    console.log('[RTool] Invalid prompt text, skipping');
+    return;
+  }
+  
+  // Clean up the prompt text
+  promptText = promptText.trim();
+  
+  // CRITICAL: Filter out garbage that looks like JavaScript code
+  const isGarbage = (
+    promptText.includes('window.__oai_') ||
+    promptText.includes('Date.now') ||
+    promptText.includes('requestAnimationFrame') ||
+    (promptText.includes('window.') && promptText.includes('(')) ||
+    promptText.includes('__oai_') ||
+    promptText.includes('function(') ||
+    promptText.includes('=>') ||
+    promptText.includes('console.log')
+  );
+  
+  if (isGarbage) {
+    console.log('[RTool] ⚠️ BLOCKED manual prompt capture - detected garbage:', promptText.substring(0, 100));
+    return;
+  }
+  
+  // Check for very short prompts that might be UI elements
+  if (promptText.length < 3) {
+    console.log('[RTool] Prompt too short, likely not a real prompt:', promptText);
+    return;
+  }
+  
+  // For Window 1, be more lenient with duplicate detection
+  // This is critical to ensure Window 1's manual prompts are captured
+  if (windowIndex === 0 && promptText === lastPrompt) {
+    // For Window 1, check how long it's been since we last captured this prompt
+    const now = Date.now();
+    const timeSinceLastCapture = now - (window.lastPromptCaptureTime || 0);
+    
+    // If it's been more than 10 seconds, allow recapturing the same prompt
+    if (timeSinceLastCapture > 10000) {
+      console.log('[RTool] Window 1 manual prompt unchanged but time threshold exceeded, capturing anyway');
+    } else {
+      console.log('[RTool] Window 1 manual prompt unchanged, skipping');
+      return;
+    }
+  } else if (promptText === lastPrompt) {
+    // Standard duplicate detection for other windows
     console.log('[RTool] Manual prompt unchanged, skipping');
     return;
   }
 
-  // Prevent rapid duplicate captures
+  // Prevent rapid duplicate captures - be more lenient for Window 1
   const now = Date.now();
-  if (window.lastPromptCaptureTime && (now - window.lastPromptCaptureTime) < 1000) {
-    console.log('[RTool] Manual prompt captured too recently, skipping');
+  const minTimeBetweenCaptures = windowIndex === 0 ? 500 : 1000; // 0.5 seconds for Window 1, 1 second for others
+  
+  if (window.lastPromptCaptureTime && (now - window.lastPromptCaptureTime) < minTimeBetweenCaptures) {
+    console.log(`[RTool] Manual prompt captured too recently (${now - window.lastPromptCaptureTime}ms), skipping`);
     return;
   }
+  
+  // Check if windowIndex is set
+  if (windowIndex === null || windowIndex === undefined) {
+    console.error('[RTool] Window index not set, cannot log manual prompt');
+    // Try to recover by using a default window index
+    windowIndex = 0;
+  }
+  
+  console.log(`[RTool] Capturing manual prompt for Window ${windowIndex}: ${promptText.substring(0, 50)}...`);
+  
   window.lastPromptCaptureTime = now;
 
   // Mark this prompt as captured by input monitoring
@@ -467,6 +1080,7 @@ function captureManualPrompt(promptText) {
 
   lastPrompt = promptText;
   console.log('[RTool] ✓ Captured manual prompt:', promptText.substring(0, 100));
+  console.log('[RTool] Window index for this prompt:', windowIndex);
 
   // Reset response state for new prompt
   lastResponse = null;
@@ -479,13 +1093,70 @@ function captureManualPrompt(promptText) {
     responseDebounceTimer = null;
   }
 
-  // Send to popup to create the entry
-  chrome.runtime.sendMessage({
-    action: 'manualPrompt',
-    windowIndex: windowIndex,
-    prompt: promptText,
-    timestamp: new Date().toISOString()
-  }).catch(err => console.log('[RTool] Failed to send manual prompt:', err));
+  // Send to popup to create the entry with retry logic
+  function sendManualPrompt(retryCount = 0) {
+    // Add critical information to ensure proper logging
+    const message = {
+      action: 'manualPrompt',
+      windowIndex: windowIndex,
+      prompt: promptText,
+      isManual: true, // Flag to ensure proper labeling
+      timestamp: new Date().toISOString(),
+      url: window.location.href, // Include the URL for better identification
+      source: 'direct_input_capture', // Indicate this was captured directly from input
+      manualOverride: true // Special flag to force manual prompt handling
+    };
+    
+    console.log(`[RTool] [Window ${windowIndex}] Sending manual prompt message:`, message);
+    
+    chrome.runtime.sendMessage(message).then((response) => {
+      console.log(`[RTool] [Window ${windowIndex}] ✓ Manual prompt sent successfully, response:`, response);
+      
+      // Force a DOM scan to ensure we capture the response
+      setTimeout(() => {
+        console.log(`[RTool] [Window ${windowIndex}] Forcing DOM scan after manual prompt`);
+        const messages = extractConversationMessages();
+        if (messages.length > 0) {
+          console.log(`[RTool] [Window ${windowIndex}] Force scan found`, messages.length, 'messages');
+        }
+      }, 500);
+    }).catch(err => {
+      console.error(`[RTool] [Window ${windowIndex}] Failed to send manual prompt:`, err);
+      
+      // Retry with exponential backoff
+      if (retryCount < 5) {
+        const delay = Math.min(500 * Math.pow(1.5, retryCount), 5000); // Exponential backoff with 5s max
+        console.log(`[RTool] [Window ${windowIndex}] Retrying manual prompt send (attempt ${retryCount + 1}) after ${delay}ms`);
+        setTimeout(() => sendManualPrompt(retryCount + 1), delay);
+      } else {
+        console.error(`[RTool] [Window ${windowIndex}] Failed to send manual prompt after ${retryCount} retries`);
+      }
+    });
+  }
+  
+  // Start the send process
+  sendManualPrompt();
+  
+  // Also set a timer to check for responses after manual prompt
+  setTimeout(() => {
+    if (!isLoggingResponse && !pendingResponse) {
+      console.log('[RTool] Setting up delayed scan for manual prompt response');
+      const checkForResponse = () => {
+        const messages = extractConversationMessages();
+        const assistantMessages = messages.filter(m => m.role === 'assistant');
+        if (assistantMessages.length > 0) {
+          console.log('[RTool] Found assistant response in delayed scan');
+        }
+        
+        // Keep checking for a while
+        if (!isLoggingResponse && !pendingResponse) {
+          setTimeout(checkForResponse, 2000);
+        }
+      };
+      
+      checkForResponse();
+    }
+  }, 2000);
 }
 
 // Check if response streaming is complete (config-driven)
@@ -575,54 +1246,204 @@ function logCompletedResponse(responseText) {
     console.log('[RTool] Already logged this exact response, skipping');
     return;
   }
+  
+  // NEVER log pending responses
+  if (responseText === '(pending)') {
+    console.log('[RTool] Refusing to log "(pending)" placeholder');
+    return;
+  }
+  
+  // Enforce minimum response length - more strict for Gemini
+  const minLength = currentSiteKey === 'gemini' ? 200 : 50;
+  if (responseText.length < minLength) {
+    console.log(`[RTool] Response too short (${responseText.length} < ${minLength} chars), skipping`);
+    return;
+  }
+  
+  // Check if this response is too similar to one we've already logged
+  if (responseHistory.length > 0) {
+    // AGGRESSIVE FRAGMENT DETECTION
+    
+    // 1. Check if this is a fragment of ANY previous response
+    const isFragment = responseHistory.some(prevResponse => {
+      // If this response is contained within a previous one (with 90% overlap)
+      if (prevResponse.includes(responseText.substring(0, Math.floor(responseText.length * 0.9)))) {
+        console.log('[RTool] Response is a fragment of a previous response (contained within)');
+        return true;
+      }
+      
+      // If a previous response is contained within this one (partial response)
+      if (responseText.includes(prevResponse) && responseText.length > prevResponse.length) {
+        console.log('[RTool] Previous response was a fragment of this one (partial)');
+        // In this case, we'll allow this longer response to replace the shorter one
+        // by removing the shorter one from history
+        const index = responseHistory.indexOf(prevResponse);
+        if (index !== -1) {
+          responseHistory.splice(index, 1);
+          console.log('[RTool] Removed shorter fragment from history');
+        }
+        return false;
+      }
+      
+      return false;
+    });
+    
+    if (isFragment) {
+      console.log('[RTool] Skipping fragment');
+      return;
+    }
+    
+    // 2. Check for high similarity with any previous response
+    const isTooSimilar = responseHistory.some(prevResponse => {
+      // Calculate similarity ratio
+      const longerLength = Math.max(prevResponse.length, responseText.length);
+      const shorterLength = Math.min(prevResponse.length, responseText.length);
+      const lengthRatio = shorterLength / longerLength;
+      
+      // If lengths are very close (within 10%) and content has substantial overlap
+      if (lengthRatio > 0.9) {
+        // Check for content overlap
+        if (prevResponse.includes(responseText.substring(0, 100)) || 
+            responseText.includes(prevResponse.substring(0, 100))) {
+          console.log('[RTool] Response too similar to a previous one (>90% length match with content overlap)');
+          return true;
+        }
+      }
+      
+      return false;
+    });
+    
+    if (isTooSimilar) {
+      console.log('[RTool] Skipping too similar response');
+      return;
+    }
+  }
 
   isLoggingResponse = true;
   lastResponse = responseText;
   pendingResponse = null;
+  lastLoggedResponseTime = Date.now();
+  
+  // Add to response history (keep only last 5)
+  responseHistory.push(responseText);
+  if (responseHistory.length > 5) {
+    responseHistory.shift();
+  }
 
-  console.log('[RTool] Logging response (length:', responseText.length, '):', responseText.substring(0, 100) + '...');
+  console.log('[RTool] ========================================');
+  console.log(`[RTool] [Window ${windowIndex}] Logging response (length: ${responseText.length}):`, responseText.substring(0, 100) + '...');
+  console.log(`[RTool] [Window ${windowIndex}] Current state: lastPrompt=${lastPrompt ? lastPrompt.substring(0, 30) : 'NULL'}, injectedPrompt=${injectedPrompt ? injectedPrompt.substring(0, 30) : 'NULL'}, waitingForResponse=${waitingForResponse}`);
+  console.log(`[RTool] [Window ${windowIndex}] blockManualPromptCapture=${window.blockManualPromptCapture}`);
+  console.log('[RTool] ========================================');
 
-  // Try to use lastPrompt if available (for manual interactions)
+  // FOR CHATGPT: Use injected prompt if waiting; also tag source for disambiguation
+  // FOR GEMINI: Use lastPrompt (normal DOM detection)
   let promptToUse = lastPrompt;
+  let responseSource = 'unknown'; // 'auto' | 'manual'
+  
+  if (currentSiteKey === 'chatgpt') {
+    if (injectedPrompt && waitingForResponse) {
+      // Auto-prompt response
+      promptToUse = injectedPrompt;
+      responseSource = 'auto';
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Using injectedPrompt for auto-prompt response:`, promptToUse.substring(0, 50));
+    } else if (lastPrompt && !lastPrompt.includes('window.__oai_')) {
+      // Manual prompt response
+      promptToUse = lastPrompt;
+      responseSource = 'manual';
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Using lastPrompt for manual prompt response:`, promptToUse.substring(0, 50));
+    } else {
+      console.warn(`[RTool] [Window ${windowIndex}] [ChatGPT] ⚠️ No valid prompt available! lastPrompt=${lastPrompt ? lastPrompt.substring(0, 30) : 'NULL'}`);
+    }
+    
+    // Clear the waiting flag now that we've classified/logged the response
+    if (waitingForResponse) {
+      waitingForResponse = false;
+      window.waitingForResponse = false;
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Cleared waitingForResponse flag`);
+    }
+    
+    // CRITICAL: Clear injectedPrompt after logging to prevent reuse for manual prompts
+    if (injectedPrompt) {
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Clearing injectedPrompt to prevent reuse:`, injectedPrompt.substring(0, 30));
+      injectedPrompt = null;
+      window.injectedPrompt = null;
+    }
+    
+    // Clear the manual prompt capture block now that the response is logged
+    console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Checking blockManualPromptCapture flag: ${window.blockManualPromptCapture}`);
+    if (window.blockManualPromptCapture) {
+      window.blockManualPromptCapture = false;
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] ✓ Unblocked manual prompt capture`);
+    } else {
+      console.log(`[RTool] [Window ${windowIndex}] [ChatGPT] Flag was already false, no need to unblock`);
+    }
+  }
 
-  // If no lastPrompt (manual detection failed), try to find a pending RTOOL entry
+  // If no promptToUse (manual detection failed), try to find a pending RTOOL entry
   if (!promptToUse) {
-    console.log('[RTool] No lastPrompt, looking for pending RTOOL entries...');
+    console.log('[RTool] No promptToUse, looking for pending RTOOL entries...');
     // This will be handled by the background script's addLogEntry function
     // which can match responses to existing pending entries
   }
 
-  console.log('[RTool] Using prompt for logging:', promptToUse ? promptToUse.substring(0, 50) : 'NULL (will match pending entries)');
+  console.log(`[RTool] [Window ${windowIndex}] Using prompt for logging:`, promptToUse ? promptToUse.substring(0, 50) : 'NULL (will match pending entries)');
 
-  // Send to background for logging
-  chrome.runtime.sendMessage({
-    action: 'logConversation',
-    windowIndex: windowIndex,
-    prompt: promptToUse,  // May be null for RTOOL responses
-    response: lastResponse,
-    timestamp: new Date().toISOString()
-  }).then(() => {
-    console.log('[RTool] ✓ Response logged successfully');
-    // Reset flag after a delay to allow for next response
-    setTimeout(() => {
-      isLoggingResponse = false;
-    }, 1000);
-  }).catch(err => {
-    console.error('[RTool] ✗ Failed to log response:', err);
-    isLoggingResponse = false;
-  });
+  // Send to background for logging with retry
+  function sendResponseLog(retryCount = 0) {
+    const message = {
+      action: 'logConversation',
+      windowIndex: windowIndex,
+      prompt: promptToUse,  // May be null for RTOOL responses
+      response: lastResponse,
+      timestamp: new Date().toISOString(),
+      // Disambiguation flags for popup.js association logic
+      isAuto: responseSource === 'auto',
+      isManual: responseSource === 'manual'
+    };
+    
+    console.log(`[RTool] [Window ${windowIndex}] Sending response log:`, {
+      windowIndex: message.windowIndex,
+      prompt: message.prompt ? message.prompt.substring(0, 30) : 'NULL',
+      responseLength: message.response?.length
+    });
+    
+    chrome.runtime.sendMessage(message).then((response) => {
+      console.log(`[RTool] [Window ${windowIndex}] ✓ Response logged successfully, response:`, response);
+      // Reset flag after a delay to allow for next response
+      setTimeout(() => {
+        isLoggingResponse = false;
+      }, 3000); // Longer cooldown to prevent rapid duplicate logging
+    }).catch(err => {
+      console.error(`[RTool] [Window ${windowIndex}] ✗ Failed to log response:`, err);
+      
+      // Retry with exponential backoff
+      if (retryCount < 3) {
+        const delay = Math.min(500 * Math.pow(2, retryCount), 3000);
+        console.log(`[RTool] [Window ${windowIndex}] Retrying response log (attempt ${retryCount + 1}) after ${delay}ms`);
+        setTimeout(() => sendResponseLog(retryCount + 1), delay);
+      } else {
+        console.error(`[RTool] [Window ${windowIndex}] Failed to log response after ${retryCount} retries`);
+        isLoggingResponse = false;
+      }
+    });
+  }
+  
+  sendResponseLog();
 }
 
 function stopConversationMonitoring() {
   if (conversationObserver) {
     conversationObserver.disconnect();
     conversationObserver = null;
+    window.conversationObserver = null;
   }
   if (responseDebounceTimer) {
     clearTimeout(responseDebounceTimer);
     responseDebounceTimer = null;
   }
   isMonitoring = false;
+  window.isMonitoring = false;
   console.log('[RTool] Conversation monitoring stopped');
 }
 
@@ -630,6 +1451,27 @@ function stopConversationMonitoring() {
 function extractConversationMessages() {
   console.log('[RTool] extractConversationMessages called, currentSiteConfig:', !!currentSiteConfig);
 
+  // Special case for Gemini - use dedicated extraction
+  if (currentSiteConfig && currentSiteKey === 'gemini') {
+    console.log('[RTool] Using specialized Gemini extraction');
+    try {
+      // Dynamically load the Gemini extraction function
+      if (typeof extractGeminiMessages === 'function') {
+        const geminiMessages = extractGeminiMessages();
+        if (geminiMessages && geminiMessages.length > 0) {
+          console.log(`[RTool] Gemini extraction successful: ${geminiMessages.length} messages`);
+          return geminiMessages;
+        } else {
+          console.log('[RTool] Gemini extraction returned 0 messages, trying fallback');
+        }
+      } else {
+        console.error('[RTool] extractGeminiMessages function not found');
+      }
+    } catch (error) {
+      console.error('[RTool] Error in Gemini extraction:', error);
+    }
+  }
+  
   // Use config-driven extraction if available
   if (currentSiteConfig) {
     console.log(`[RTool] Using config for ${currentSiteConfig.name}`);
@@ -837,4 +1679,57 @@ function extractConversationMessagesLegacy() {
   
   return messages;
 }
+
+// Debug function for DOM inspection (runs in content script context)
+// Note: Due to CSP restrictions, we can't inject into page context
+// This function can be triggered via chrome.tabs.sendMessage from popup
+function debugDOM() {
+  console.log('=== RTool DOM Debug ===');
+  console.log('Current URL:', window.location.href);
+  console.log('Site Key:', currentSiteKey);
+  console.log('Site Config:', currentSiteConfig);
+  
+  console.log('\n--- Common ChatGPT Selectors ---');
+  console.log('[data-message-author-role]:', document.querySelectorAll('[data-message-author-role]').length);
+  console.log('[data-testid*="conversation-turn"]:', document.querySelectorAll('[data-testid*="conversation-turn"]').length);
+  console.log('article[data-testid]:', document.querySelectorAll('article[data-testid]').length);
+  console.log('.group.w-full:', document.querySelectorAll('.group.w-full').length);
+  console.log('main:', document.querySelectorAll('main').length);
+  
+  const main = document.querySelector('main');
+  if (main) {
+    console.log('\n--- Main Element ---');
+    console.log('Children count:', main.children.length);
+    console.log('First 3 children:');
+    for (let i = 0; i < Math.min(3, main.children.length); i++) {
+      const child = main.children[i];
+      console.log(`  ${i}: ${child.tagName}.${child.className}`);
+      console.log(`     Attributes:`, Array.from(child.attributes).map(a => `${a.name}="${a.value}"`).join(' '));
+      console.log(`     Text preview:`, child.innerText?.substring(0, 50));
+    }
+  }
+  
+  console.log('\n--- All elements with data-testid ---');
+  const testIds = document.querySelectorAll('[data-testid]');
+  const uniqueTestIds = new Set();
+  testIds.forEach(el => {
+    const testId = el.getAttribute('data-testid');
+    uniqueTestIds.add(testId);
+  });
+  console.log('Unique data-testid values:', Array.from(uniqueTestIds).sort());
+  
+  console.log('\n--- Try extraction ---');
+  if (currentSiteConfig) {
+    const messages = extractConversationMessagesWithConfig(currentSiteConfig);
+    console.log('Extracted messages:', messages);
+  } else {
+    console.log('No site config available');
+  }
+  
+  console.log('\n======================');
+}
+
+console.log('[RTool] ========== CONTENT SCRIPT FULLY LOADED ==========');
+console.log('[RTool] Content script is running in isolated context (normal for Chrome extensions)');
+console.log('[RTool] To debug DOM, send a "debugDOM" message from background script');
 

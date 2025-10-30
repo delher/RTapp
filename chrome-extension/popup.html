@@ -17,29 +17,34 @@
   </div>
 
   <div class="section">
-    <label>User ID: <span class="required">*</span></label>
-    <input type="text" id="userId" placeholder="Enter your user ID" required />
-    
-    <label>Instances:</label>
-    <select id="instanceCount">
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3" selected>3</option>
-      <option value="4">4</option>
-    </select>
+    <details id="setupSection" open>
+      <summary class="setup-summary">⚙️ Setup</summary>
+      <div class="setup-content">
+        <label>User ID: <span class="required">*</span></label>
+        <input type="text" id="userId" placeholder="Enter your user ID" required />
+        
+        <label>Instances:</label>
+        <select id="instanceCount">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+        </select>
 
-    <label>Target Site:</label>
-    <select id="siteSelect">
-      <option value="chatgpt">ChatGPT (chatgpt.com)</option>
-      <option value="gemini">Gemini (gemini.google.com)</option>
-      <option value="claude">Claude (claude.ai)</option>
-      <option value="grok">Grok (grok.x.com)</option>
-    </select>
-    
-    <div class="button-row">
-      <button id="openBtn" class="primary">Open Windows</button>
-      <button id="closeBtn" class="secondary">Close All</button>
-    </div>
+        <label>Target Site:</label>
+        <select id="siteSelect">
+          <option value="chatgpt">ChatGPT (chatgpt.com)</option>
+          <option value="gemini">Gemini (gemini.google.com)</option>
+          <option value="claude">Claude (claude.ai)</option>
+          <option value="grok">Grok (grok.x.com)</option>
+        </select>
+        
+        <div class="button-row">
+          <button id="openBtn" class="primary">Open Windows</button>
+          <button id="closeBtn" class="secondary">Close All</button>
+        </div>
+      </div>
+    </details>
   </div>
 
   <div class="section">
@@ -48,14 +53,14 @@
       <textarea id="promptInput" rows="3" placeholder="Enter your prompt here..."></textarea>
       <button id="recycleBtn" class="recycle-btn" title="Reload last prompt">♻️</button>
     </div>
-    <button id="sendBtn" class="primary">Send to All Windows</button>
   </div>
 
   <div class="section">
-    <details open>
+    <details id="transformsSection" open>
       <summary>Per-Window Transforms</summary>
       <div id="transformsList"></div>
     </details>
+    <button id="sendBtn" class="primary">Send to All Windows</button>
   </div>
 
   <div class="section">

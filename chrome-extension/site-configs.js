@@ -1,24 +1,75 @@
 // Site-specific configurations for different AI chat platforms
 // Each config defines how to detect and extract messages for logging
+//
+// ARCHITECTURE NOTES:
+// ===================
+// This file contains SITE-SPECIFIC configuration for each AI chat platform.
+// Each configuration defines:
+//   1. URL and name of the site
+//   2. DOM selectors for finding messages
+//   3. Filtering rules for excluding unwanted content
+//   4. Completion detection methods
+//
+// When adding a new site or modifying an existing one:
+//   - All changes should be isolated to that site's config object
+//   - Changes to one site should NOT affect other sites
+//   - Test thoroughly with that specific site
+//
+// The logging system (popup.js) is INDEPENDENT of these configs.
+// Extraction logic (content-extraction.js) uses these configs but doesn't
+// contain site-specific code itself.
 
-const SITE_CONFIGS = {
+// Use var instead of const to allow re-declaration without errors
+var SITE_CONFIGS = window.SITE_CONFIGS || {
   'chatgpt': {
     name: 'ChatGPT',
     url: 'https://chatgpt.com/',
     detection: {
-      // Primary detection method
-      messageSelector: '[data-message-author-role]',
-      roleAttribute: 'data-message-author-role',
-      contentSelectors: ['.markdown', '[class*="text"]'],
+      // Primary detection methods - try multiple selectors
+      messageSelectors: [
+        '[data-message-author-role]',
+        '[data-testid*="conversation-turn"]',
+        'article[data-testid]',
+        '.group.w-full',
+        '[class*="agent-turn"]',
+        '[class*="user-turn"]'
+      ],
+      
+      // Role detection
+      roleIndicators: {
+        user: [
+          '[data-message-author-role="user"]',
+          '[data-testid*="user"]',
+          '.user-turn',
+          '[class*="user"]'
+        ],
+        assistant: [
+          '[data-message-author-role="assistant"]',
+          '[data-testid*="assistant"]',
+          '.agent-turn',
+          '[class*="assistant"]',
+          '[class*="agent"]'
+        ]
+      },
       
       // Completion detection
       stopButton: 'button[aria-label*="Stop" i]',
       regenerateButton: 'button[aria-label*="Regenerate" i]',
-      streamingClasses: ['streaming', 'generating']
+      streamingClasses: ['streaming', 'generating'],
+      completionButtons: [
+        'button[aria-label*="Copy" i]',
+        'button[aria-label*="Regenerate" i]'
+      ]
     },
     filtering: {
-      // No special filtering needed for ChatGPT
-      skipPatterns: []
+      // Skip UI elements and metadata
+      skipPatterns: [
+        'Copy code',
+        'Regenerate',
+        'Continue generating',
+        'Stop generating'
+      ],
+      minResponseLength: 10
     }
   },
   
@@ -26,114 +77,19 @@ const SITE_CONFIGS = {
     name: 'Gemini',
     url: 'https://gemini.google.com/',
     detection: {
-      // Focus on actual response containers, not thinking sections
-      messageSelectors: [
-        // Primary: Look for all message types
-        '[class*="message"]',
-        '[class*="query"]',
-        '[class*="response"]',
-        '[class*="conversation"]',
-        '[data-message-id]',
-        '[data-response-id]',
-        '[data-query-id]',
-        // Specific Gemini elements
-        'message-content',
-        '.message',
-        '.query',
-        '.response'
-      ],
-      containerSelectors: [
-        '[class*="conversation"]',
-        '[class*="chat-history"]',
-        '[class*="chat"]',
-        '[class*="thread"]',
-        'main',
-        '[role="main"]',
-        '.conversation',
-        '.chat-history',
-        'chat-window'
-      ],
-      roleIndicators: {
-        user: ['user', 'query', 'human', 'you', 'prompt', 'input', 'message-user', 'user-message'],
-        assistant: ['model', 'assistant', 'bot', 'response', 'gemini', 'ai', 'assistant-message', 'model-response']
-      },
-
+      // Use specialized extraction for Gemini
+      useSpecializedExtraction: true,
+      
       // Completion detection
       streamingClasses: ['streaming', 'generating'],
       completionButtons: [
         'button[aria-label*="Copy" i]',
         'button[title*="Copy" i]',
-        'button[aria-label*="Share" i]'
+        'button[aria-label*="Share" i]',
+        'button[aria-label*="thumbs" i]',
+        'button[aria-label*="like" i]',
+        'button[aria-label*="dislike" i]'
       ]
-    },
-    filtering: {
-      // Minimum response length (very short messages are likely thinking phases)
-      minResponseLength: 50,  // Responses must be at least 50 chars
-
-      // Structural filtering - identify thinking messages by DOM structure
-      skipSelectors: [
-        // Thinking/reasoning sections
-        '[aria-label*="thinking" i]',
-        '[aria-label*="reasoning" i]',
-        '[data-thinking="true"]',
-        '[data-reasoning="true"]',
-
-        // Collapsible/expandable sections
-        '[aria-expanded="false"]',
-        '[data-collapsed="true"]',
-        'details:not([open])',
-        '.thinking-section',
-        '.reasoning-block',
-
-        // Headers and intermediate steps
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-        '[class*="header"]',
-        '[class*="title"]',
-        '[role="heading"]',
-
-        // Progress indicators
-        '[class*="progress"]',
-        '[class*="loading"]',
-        '[class*="spinner"]',
-        '[aria-label*="loading" i]',
-
-        // Gemini-specific thinking containers
-        '[class*="thinking-container"]',
-        '[class*="analysis-section"]',
-        '[data-step-type="thinking"]',
-        '[data-step-type="analysis"]'
-      ],
-
-      // Content-based filtering for remaining edge cases
-      skipPatterns: [
-        {
-          type: 'content',
-          maxLength: 200,  // Only check short content
-          keywords: [
-            // Explicit thinking indicators
-            'thinking', 'reasoning', 'analyzing', 'interpreting',
-            'considering', 'evaluating', 'examining', 'exploring',
-            'investigating', 'processing', 'working', 'searching',
-            'finding', 'locating', 'identifying', 'seeking',
-
-            // Status messages
-            'constructing', 'gathering', 'finalizing', 'preparing',
-            'compiling', 'assembling', 'building', 'draft',
-            'details', 'intel', 'knowledge', 'information',
-
-            // Time indicators
-            'just a sec', 'one moment', 'please wait',
-
-            // Gemini-specific patterns
-            'analyzing ', 'interpreting ', 'considering ',
-            'examining ', 'evaluating ', 'exploring ',
-            'investigating ', 'processing ', 'working '
-          ]
-        }
-      ],
-
-      // Minimum content length for filtering
-      minContentLength: 200  // Skip messages shorter than 200 chars if they match patterns
     }
   },
   
@@ -181,13 +137,13 @@ const SITE_CONFIGS = {
   }
 };
 
-// Get config for a given site key
-function getSiteConfig(siteKey) {
+// Get config for a given site key (use var to allow re-declaration)
+var getSiteConfig = window.getSiteConfig || function(siteKey) {
   return SITE_CONFIGS[siteKey] || null;
-}
+};
 
-// Get site key from URL
-function getSiteKeyFromUrl(url) {
+// Get site key from URL (use var to allow re-declaration)
+var getSiteKeyFromUrl = window.getSiteKeyFromUrl || function(url) {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase();
@@ -201,10 +157,15 @@ function getSiteKeyFromUrl(url) {
   } catch (e) {
     return null;
   }
-}
+};
 
 // Export for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { SITE_CONFIGS, getSiteConfig, getSiteKeyFromUrl };
 }
+
+// Store in window for access
+window.SITE_CONFIGS = SITE_CONFIGS;
+window.getSiteConfig = getSiteConfig;
+window.getSiteKeyFromUrl = getSiteKeyFromUrl;
 

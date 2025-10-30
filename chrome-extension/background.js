@@ -8,6 +8,9 @@ let isInitialized = false;
 // Store control panel window
 let controlPanelWindowId = null;
 
+// Track which tabs have content scripts injected
+let injectedTabs = new Set();
+
 // Open floating control panel when extension icon is clicked
 chrome.action.onClicked.addListener(async () => {
   // Check if control panel is already open
@@ -49,7 +52,12 @@ chrome.windows.onRemoved.addListener((windowId) => {
   const index = rtoolWindows.findIndex(w => w.id === windowId);
   if (index !== -1) {
     console.log(`Window ${windowId} was closed externally`);
+    const tabId = rtoolWindows[index].tabId;
     rtoolWindows.splice(index, 1);
+    // Remove from injected tabs set
+    if (tabId) {
+      injectedTabs.delete(tabId);
+    }
     chrome.storage.local.set({ rtoolWindows: rtoolWindows });
   }
 });
@@ -95,7 +103,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       windowIndex: request.windowIndex,
       prompt: request.prompt,
       response: request.response,
-      timestamp: request.timestamp
+      timestamp: request.timestamp,
+      // Forward disambiguation flags
+      isAuto: request.isAuto,
+      isManual: request.isManual
     }).catch(err => console.log('[RTool BG] Popup not open, log not forwarded'));
     sendResponse({ success: true });
     return true;
@@ -104,13 +115,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Handle manual prompt capture from content scripts
   if (request.action === 'manualPrompt') {
     console.log('[RTool BG] Received manual prompt:', request);
+    
     // Forward to popup for CSV logging
+    // Forward all properties from the original request
     chrome.runtime.sendMessage({
       action: 'manualPrompt',
       windowIndex: request.windowIndex,
       prompt: request.prompt,
-      timestamp: request.timestamp
-    }).catch(err => console.log('[RTool BG] Popup not open, manual prompt not forwarded'));
+      isManual: request.isManual || true, // Forward the isManual flag
+      timestamp: request.timestamp,
+      url: request.url || '', // Forward URL if available
+      source: request.source || 'content_script', // Forward source information
+      manualOverride: request.manualOverride || true // Forward manual override flag
+    }).catch(err => {
+      console.log('[RTool BG] Popup not open, manual prompt not forwarded:', err);
+      
+      // Retry once after a delay
+      setTimeout(() => {
+        console.log('[RTool BG] Retrying manual prompt forward');
+        chrome.runtime.sendMessage({
+          action: 'manualPrompt',
+          windowIndex: request.windowIndex,
+          prompt: request.prompt,
+          isManual: request.isManual || true,
+          timestamp: request.timestamp,
+          url: request.url || '',
+          source: request.source || 'content_script',
+          manualOverride: request.manualOverride || true, // Forward manual override flag
+          isRetry: true
+        }).catch(e => console.log('[RTool BG] Retry failed:', e));
+      }, 1000);
+    });
+    
     sendResponse({ success: true });
     return true;
   }
@@ -133,6 +169,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     else if (request.action === 'startMonitoring') {
       handleStartMonitoring().then(sendResponse);
     }
+    else {
+      // Unknown action - send error response
+      console.error('[RTool BG] Unknown action:', request.action);
+      sendResponse({ success: false, error: `Unknown action: ${request.action}` });
+    }
+  }).catch(error => {
+    console.error('[RTool BG] Error in initializeWindows:', error);
+    sendResponse({ success: false, error: error.message });
   });
   
   return true; // Will respond asynchronously
@@ -142,18 +186,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 async function handleStartMonitoring() {
   try {
     console.log('[RTool BG] Starting monitoring on all windows');
+    let successCount = 0;
+    
     for (const win of rtoolWindows) {
       try {
+        // First, verify the content script is loaded
+        try {
+          await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+        } catch (pingError) {
+          // Only re-inject if not already injected
+          if (!injectedTabs.has(win.tabId)) {
+            console.warn(`[RTool BG] Window ${win.index} not responding, injecting content script...`);
+            
+            // Inject content script
+            await chrome.scripting.executeScript({
+              target: { tabId: win.tabId },
+              files: ['site-configs.js', 'content-extraction.js', 'gemini-extraction.js', 'content.js']
+            });
+            
+            // Mark as injected
+            injectedTabs.add(win.tabId);
+            
+            // Wait for injection to complete
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Test again
+            await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+            console.log(`[RTool BG] Window ${win.index} now responding after injection`);
+          } else {
+            console.warn(`[RTool BG] Window ${win.index} not responding but already marked as injected`);
+          }
+        }
+        
+        // Now start monitoring
         await chrome.tabs.sendMessage(win.tabId, {
           action: 'startMonitoring',
           windowIndex: win.index,
           siteKey: win.siteKey
         });
+        
+        console.log(`[RTool BG] Successfully started monitoring on window ${win.index}`);
+        successCount++;
       } catch (error) {
         console.error(`[RTool BG] Failed to start monitoring on window ${win.index}:`, error);
       }
     }
-    return { success: true };
+    
+    console.log(`[RTool BG] Started monitoring on ${successCount}/${rtoolWindows.length} windows`);
+    return { success: successCount > 0, successCount, totalCount: rtoolWindows.length };
   } catch (error) {
     console.error('[RTool BG] Error starting monitoring:', error);
     return { success: false, error: error.message };
@@ -256,31 +336,94 @@ async function handleOpenWindows(count, url, siteKey) {
         await waitForTabLoad(win.tabId);
         console.log(`[RTool BG] Tab ${win.tabId} finished loading`);
         
-        // Wait a bit more for content script auto-injection
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Get tab info for debugging
+        const tab = await chrome.tabs.get(win.tabId);
+        console.log(`[RTool BG] Tab ${win.tabId} URL: ${tab.url}`);
         
-        // Test if content script is responding
-        try {
-          await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
-          console.log(`[RTool BG] Tab ${win.tabId} content script responding`);
-        } catch (pingError) {
-          console.warn(`[RTool BG] Tab ${win.tabId} content script not responding, attempting manual injection...`);
-          
-          // Manually inject site configs, extraction logic, and content script
-          await chrome.scripting.executeScript({
-            target: { tabId: win.tabId },
-            files: ['site-configs.js', 'content-extraction.js', 'content.js']
-          });
-          
-          console.log(`[RTool BG] Tab ${win.tabId} content script manually injected`);
-          
-          // Test again
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Check if already injected
+        console.log(`[RTool BG] Checking injection status for tab ${win.tabId}...`);
+        console.log(`[RTool BG] injectedTabs Set contains:`, Array.from(injectedTabs));
+        console.log(`[RTool BG] Is tab ${win.tabId} in set?`, injectedTabs.has(win.tabId));
+
+        if (injectedTabs.has(win.tabId)) {
+          console.log(`[RTool BG] ⚠️ Tab ${win.tabId} already marked as injected, SKIPPING`);
+        } else {
+          // First, try pinging to see if manifest-injected scripts are already active
+          let pingOk = false;
           try {
-            await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
-            console.log(`[RTool BG] Tab ${win.tabId} now responding`);
-          } catch (retestError) {
-            console.error(`[RTool BG] Tab ${win.tabId} still not responding after manual injection:`, retestError);
+            const pingResponse = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+            console.log(`[RTool BG] Ping response from tab ${win.tabId}:`, pingResponse);
+            pingOk = true;
+          } catch (e) {
+            console.log(`[RTool BG] No response to ping on tab ${win.tabId}, will attempt manual injection`);
+          }
+
+          if (pingOk) {
+            // Scripts already present via manifest; mark as injected and skip reinjection
+            injectedTabs.add(win.tabId);
+            console.log(`[RTool BG] ✓ Content scripts already active on tab ${win.tabId}, no manual injection needed`);
+          } else {
+            // Manually inject scripts if ping failed
+            console.log(`[RTool BG] Proceeding with manual injection for tab ${win.tabId}...`);
+
+            try {
+              console.log(`[RTool BG] Injecting site-configs.js...`);
+              await chrome.scripting.executeScript({
+                target: { tabId: win.tabId },
+                files: ['site-configs.js']
+              });
+
+              console.log(`[RTool BG] Injecting content-extraction.js...`);
+              await chrome.scripting.executeScript({
+                target: { tabId: win.tabId },
+                files: ['content-extraction.js']
+              });
+
+              console.log(`[RTool BG] Injecting gemini-extraction.js...`);
+              await chrome.scripting.executeScript({
+                target: { tabId: win.tabId },
+                files: ['gemini-extraction.js']
+              });
+
+              console.log(`[RTool BG] Injecting content.js...`);
+              await chrome.scripting.executeScript({
+                target: { tabId: win.tabId },
+                files: ['content.js']
+              });
+
+              console.log(`[RTool BG] ✓ All scripts injected successfully into tab ${win.tabId}`);
+
+              // Mark as injected
+              injectedTabs.add(win.tabId);
+
+              // Wait for scripts to initialize
+              await new Promise(resolve => setTimeout(resolve, 1000));
+
+              // Test if content script is responding
+              try {
+                await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+                console.log(`[RTool BG] ✓ Tab ${win.tabId} content script responding`);
+              } catch (pingError) {
+                console.error(`[RTool BG] ✗ Tab ${win.tabId} not responding to ping after injection:`, pingError);
+              }
+
+            } catch (injectError) {
+              console.error(`[RTool BG] ✗ Injection failed for tab ${win.tabId}:`, injectError);
+              console.error(`[RTool BG] Error message:`, injectError.message);
+              console.error(`[RTool BG] Error stack:`, injectError.stack);
+
+              // Try to get more details about why injection failed
+              try {
+                const tab = await chrome.tabs.get(win.tabId);
+                console.error(`[RTool BG] Tab details:`, {
+                  url: tab.url,
+                  status: tab.status,
+                  title: tab.title
+                });
+              } catch (e) {
+                console.error(`[RTool BG] Could not get tab details:`, e);
+              }
+            }
           }
         }
       } catch (error) {
@@ -313,6 +456,7 @@ async function handleCloseWindows() {
     }
     
     rtoolWindows = [];
+    injectedTabs.clear(); // Clear the injection tracking
     await chrome.storage.local.set({ rtoolWindows: [] });
     
     return { success: true };
@@ -351,24 +495,38 @@ async function handleSendPrompt(prompt, transforms) {
           const pingResponse = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
           console.log(`[RTool BG] Tab ${win.tabId} responded to ping:`, pingResponse);
         } catch (pingError) {
-          console.error(`[RTool BG] Tab ${win.tabId} not responding to ping, attempting re-injection:`, pingError);
+          console.error(`[RTool BG] Tab ${win.tabId} not responding to ping:`, pingError);
           
-          // Try to re-inject content script
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId: win.tabId },
-              files: ['site-configs.js', 'content-extraction.js', 'content.js']
-            });
-            console.log(`[RTool BG] Re-injected content script into tab ${win.tabId}`);
-            
-            // Wait and test again
-            await new Promise(resolve => setTimeout(resolve, 500));
-            const retestPing = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
-            console.log(`[RTool BG] Tab ${win.tabId} now responding after re-injection:`, retestPing);
-          } catch (reinjectError) {
-            console.error(`[RTool BG] Failed to re-inject content script:`, reinjectError);
-            throw new Error('Content script not available and re-injection failed');
+          // Only inject if not already injected
+          if (!injectedTabs.has(win.tabId)) {
+            console.log(`[RTool BG] Attempting injection for tab ${win.tabId}...`);
+            try {
+              await chrome.scripting.executeScript({
+                target: { tabId: win.tabId },
+                files: ['site-configs.js', 'content-extraction.js', 'gemini-extraction.js', 'content.js']
+              });
+              injectedTabs.add(win.tabId);
+              console.log(`[RTool BG] Injected content script into tab ${win.tabId}`);
+              
+              // Wait and test again
+              await new Promise(resolve => setTimeout(resolve, 500));
+              const retestPing = await chrome.tabs.sendMessage(win.tabId, { action: 'ping' });
+              console.log(`[RTool BG] Tab ${win.tabId} now responding after injection:`, retestPing);
+            } catch (reinjectError) {
+              console.error(`[RTool BG] Failed to inject content script:`, reinjectError);
+              throw new Error('Content script not available and injection failed');
+            }
+          } else {
+            console.error(`[RTool BG] Tab ${win.tabId} already marked as injected but not responding`);
+            throw new Error('Content script injected but not responding');
           }
+        }
+        
+        // CRITICAL: Add extra delay for the last window to ensure it's fully loaded
+        // The last window often takes longer to initialize
+        if (win.index === rtoolWindows.length - 1) {
+          console.log(`[RTool BG] Last window detected (${win.index}), adding extra 1s delay...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
         // Now send the actual prompt

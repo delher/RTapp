@@ -1,6 +1,32 @@
 // Config-driven message extraction for different AI chat sites
+// VERSION: 1.3.6 - Fixed isNewPrompt check order
+//
+// ARCHITECTURE NOTES:
+// ===================
+// This file handles SITE-SPECIFIC message extraction logic.
+// It is responsible for:
+//   1. Finding messages in the DOM based on site-specific selectors
+//   2. Determining message roles (user vs assistant)
+//   3. Filtering out unwanted content (thinking sections, UI elements, etc.)
+//
+// This file should NOT:
+//   - Handle logging logic (that's in popup.js)
+//   - Manage prompt/response association (that's in popup.js)
+//   - Track window state (that's in content.js)
+//
+// Each site (ChatGPT, Gemini, Claude, Grok) has its own configuration
+// in site-configs.js that defines how to extract messages.
+//
+// Changes to extraction logic for one site should NOT affect other sites.
+// All site-specific logic should be isolated to the site's config.
 
 function extractConversationMessagesWithConfig(siteConfig) {
+  console.log('[RTool] 🔍 extractConversationMessagesWithConfig called - VERSION 1.3.8');
+  console.log('[RTool] 🔍 Current URL:', window.location.href);
+  console.log('[RTool] 🔍 Document ready state:', document.readyState);
+  console.log('[RTool] 🔍 Body exists:', !!document.body);
+  console.log('[RTool] 🔍 Main exists:', !!document.querySelector('main'));
+  
   if (!siteConfig) {
     console.warn('[RTool] No site config available, using fallback extraction');
     return extractConversationMessagesFallback();
@@ -11,6 +37,28 @@ function extractConversationMessagesWithConfig(siteConfig) {
   const filtering = siteConfig.filtering;
 
   console.log(`[RTool] Using ${siteConfig.name} config for message extraction`);
+  
+  // DEBUG: Show what's actually on the page
+  console.log(`[RTool] DOM DEBUG - Looking for common ChatGPT elements:`);
+  console.log(`[RTool]   [data-message-author-role]:`, document.querySelectorAll('[data-message-author-role]').length);
+  console.log(`[RTool]   article:`, document.querySelectorAll('article').length);
+  console.log(`[RTool]   [data-testid]:`, document.querySelectorAll('[data-testid]').length);
+  console.log(`[RTool]   .group:`, document.querySelectorAll('.group').length);
+  console.log(`[RTool]   main:`, document.querySelectorAll('main').length);
+  
+  // CRITICAL DIAGNOSTIC: Show actual data-message-author-role values
+  const roleElements = document.querySelectorAll('[data-message-author-role]');
+  console.log(`[RTool]   Found ${roleElements.length} elements with data-message-author-role:`);
+  roleElements.forEach((el, i) => {
+    console.log(`[RTool]     ${i}: role="${el.getAttribute('data-message-author-role')}", content="${el.innerText?.substring(0, 50)}..."`);
+  });
+  
+  // Show a sample of what's in main
+  const main = document.querySelector('main');
+  if (main) {
+    console.log(`[RTool]   main has ${main.children.length} children`);
+    console.log(`[RTool]   main first child:`, main.children[0]?.tagName, main.children[0]?.className);
+  }
 
   // DEBUG: Log what we're looking for
   console.log(`[RTool] Message selectors:`, detection.messageSelectors);
@@ -23,6 +71,18 @@ function extractConversationMessagesWithConfig(siteConfig) {
 
     const messageElements = document.querySelectorAll(selector);
     console.log(`[RTool] Found ${messageElements.length} elements with message selectors`);
+    
+    // DEBUG: If no elements found, try each selector individually to see which ones work
+    if (messageElements.length === 0) {
+      console.log(`[RTool] No elements found with combined selector, trying individually...`);
+      detection.messageSelectors.forEach(sel => {
+        const elements = document.querySelectorAll(sel);
+        console.log(`[RTool]   "${sel}" -> ${elements.length} elements`);
+        if (elements.length > 0) {
+          console.log(`[RTool]   First element:`, elements[0]);
+        }
+      });
+    }
 
     // DEBUG: Log ALL found elements, even if we don't use them
     if (messageElements.length > 0) {
@@ -38,20 +98,47 @@ function extractConversationMessagesWithConfig(siteConfig) {
     if (messageElements.length > 0) {
       messageElements.forEach((msg, index) => {
         const content = msg.innerText?.trim();
-        console.log(`[RTool] Processing element ${index}: content length ${content?.length}`);
+        console.log(`[RTool] ====== Processing element ${index} ======`);
+        console.log(`[RTool] Element ${index} tag: ${msg.tagName}, classes: ${msg.className}`);
+        console.log(`[RTool] Element ${index} content length: ${content?.length}`);
+        console.log(`[RTool] Element ${index} content preview: ${content?.substring(0, 80)}`);
 
         if (!content || content.length < 5) {
           console.log(`[RTool] Skipping element ${index}: too short or empty`);
           return;
         }
 
-        if (shouldSkipMessage(msg, content, filtering)) {
+        // Detect role BEFORE filtering so we can apply role-specific filters
+        let role = detectRole(msg, detection.roleIndicators);
+        console.log(`[RTool] Element ${index} detectRole result: ${role}`);
+        
+        // If no role found, check if element has data-message-author-role attribute directly
+        if (!role && msg.hasAttribute('data-message-author-role')) {
+          role = msg.getAttribute('data-message-author-role');
+          console.log(`[RTool] Element ${index} role from direct attribute: ${role}`);
+        } else if (!role) {
+          console.log(`[RTool] Element ${index} does NOT have data-message-author-role attribute`);
+        }
+        
+        // If still no role, look for a child with the attribute
+        if (!role) {
+          const childWithRole = msg.querySelector('[data-message-author-role]');
+          console.log(`[RTool] Element ${index} searching for child with [data-message-author-role]...`);
+          if (childWithRole) {
+            role = childWithRole.getAttribute('data-message-author-role');
+            console.log(`[RTool] Element ${index} ✓ FOUND role from child attribute: ${role}`);
+          } else {
+            console.log(`[RTool] Element ${index} ✗ NO child with [data-message-author-role] found`);
+          }
+        }
+        
+        console.log(`[RTool] Element ${index} FINAL detected role: ${role}`);
+
+        // Apply filtering with role information
+        if (shouldSkipMessage(msg, content, filtering, role)) {
           console.log(`[RTool] Skipping element ${index}: filtered out`);
           return;
         }
-
-        const role = detectRole(msg, detection.roleIndicators);
-        console.log(`[RTool] Element ${index} detected role: ${role}`);
 
         if (role) {
           messages.push({ role, content });
@@ -61,10 +148,13 @@ function extractConversationMessagesWithConfig(siteConfig) {
         }
       });
 
-      console.log(`[RTool] Final messages from selectors: ${messages.length}`);
-      if (messages.length > 0) {
-        return messages;
-      }
+            console.log(`[RTool] Final messages from selectors: ${messages.length}`);
+            if (messages.length > 0) {
+              return messages;
+            } else {
+              console.error(`[RTool] ⚠️ EXTRACTION FAILED: Found ${messageElements.length} elements but extracted 0 messages!`);
+              console.error(`[RTool] This usually means all elements were filtered out or role detection failed`);
+            }
     }
   }
 
@@ -97,12 +187,12 @@ function extractConversationMessagesWithConfig(siteConfig) {
         const content = msg.innerText?.trim();
         if (!content || content.length < 5) return;
 
-        if (shouldSkipMessage(msg, content, filtering)) {
+        const role = detectRole(msg, detection.roleIndicators);
+        
+        if (shouldSkipMessage(msg, content, filtering, role)) {
           console.log(`[RTool] Container div ${index}: filtered out`);
           return;
         }
-
-        const role = detectRole(msg, detection.roleIndicators);
         console.log(`[RTool] Container div ${index}: role=${role}`);
 
         if (role) {
@@ -134,7 +224,7 @@ function extractConversationMessagesWithConfig(siteConfig) {
 
         const content = extractContent(msg, detection.contentSelectors);
 
-        if (content && content.trim() && !shouldSkipMessage(msg, content, filtering)) {
+        if (content && content.trim() && !shouldSkipMessage(msg, content, filtering, role)) {
           messages.push({ role: role || 'assistant', content: content.trim() });
         }
       });
@@ -147,7 +237,13 @@ function extractConversationMessagesWithConfig(siteConfig) {
   }
 
   // Fallback to generic detection
-  console.warn(`[RTool] ${siteConfig.name} config extraction failed, using fallback`);
+  // Only log as warning if we're in a conversation (URL contains /c/)
+  const isConversationPage = window.location.href.includes('/c/');
+  if (isConversationPage) {
+    console.warn(`[RTool] ${siteConfig.name} config extraction failed, using fallback`);
+  } else {
+    console.log(`[RTool] ${siteConfig.name} config extraction returned 0 messages (page may not be ready yet)`);
+  }
   return extractConversationMessagesFallback();
 }
 
@@ -155,19 +251,59 @@ function extractConversationMessagesWithConfig(siteConfig) {
 function detectRole(element, roleIndicators) {
   if (!roleIndicators) return null;
 
+  // Method 1: Try selector-based matching (for things like [data-message-author-role="user"])
+  if (roleIndicators.user) {
+    for (const indicator of roleIndicators.user) {
+      try {
+        // If it looks like a CSS selector, try matching
+        if (indicator.includes('[') || indicator.includes('.') || indicator.includes('#')) {
+          if (element.matches(indicator) || element.closest(indicator)) {
+            console.log(`[RTool] Detected user role from selector: ${indicator}`);
+            return 'user';
+          }
+        }
+      } catch (e) {
+        // Not a valid selector, will try string matching below
+      }
+    }
+  }
+
+  if (roleIndicators.assistant) {
+    for (const indicator of roleIndicators.assistant) {
+      try {
+        // If it looks like a CSS selector, try matching
+        if (indicator.includes('[') || indicator.includes('.') || indicator.includes('#')) {
+          if (element.matches(indicator) || element.closest(indicator)) {
+            console.log(`[RTool] Detected assistant role from selector: ${indicator}`);
+            return 'assistant';
+          }
+        }
+      } catch (e) {
+        // Not a valid selector, will try string matching below
+      }
+    }
+  }
+
+  // Method 2: Try string-based matching (for keywords like "user", "assistant")
   const classList = element.className?.toLowerCase() || '';
   const parentClass = element.parentElement?.className?.toLowerCase() || '';
   const ariaLabel = element.getAttribute('aria-label')?.toLowerCase() || '';
   const dataTestId = element.getAttribute('data-test-id')?.toLowerCase() || '';
+  const dataTestid = element.getAttribute('data-testid')?.toLowerCase() || '';
   const dataRole = element.getAttribute('data-role')?.toLowerCase() || '';
   const roleAttr = element.getAttribute('role')?.toLowerCase() || '';
-  const combined = `${classList} ${parentClass} ${ariaLabel} ${dataTestId} ${dataRole} ${roleAttr}`;
+  const dataMessageRole = element.getAttribute('data-message-author-role')?.toLowerCase() || '';
+  const combined = `${classList} ${parentClass} ${ariaLabel} ${dataTestId} ${dataTestid} ${dataRole} ${roleAttr} ${dataMessageRole}`;
 
   // Check user indicators
   if (roleIndicators.user) {
     for (const indicator of roleIndicators.user) {
-      if (combined.includes(indicator.toLowerCase())) {
-        console.log(`[RTool] Detected user role from indicator: ${indicator}`);
+      const indicatorLower = indicator.toLowerCase();
+      // Extract keyword from selector if needed (e.g., "user" from "[data-message-author-role='user']")
+      const keyword = indicatorLower.match(/["']([^"']+)["']/)?.[1] || indicatorLower;
+      
+      if (combined.includes(keyword)) {
+        console.log(`[RTool] Detected user role from indicator: ${indicator} (keyword: ${keyword})`);
         return 'user';
       }
     }
@@ -176,8 +312,12 @@ function detectRole(element, roleIndicators) {
   // Check assistant indicators
   if (roleIndicators.assistant) {
     for (const indicator of roleIndicators.assistant) {
-      if (combined.includes(indicator.toLowerCase())) {
-        console.log(`[RTool] Detected assistant role from indicator: ${indicator}`);
+      const indicatorLower = indicator.toLowerCase();
+      // Extract keyword from selector if needed
+      const keyword = indicatorLower.match(/["']([^"']+)["']/)?.[1] || indicatorLower;
+      
+      if (combined.includes(keyword)) {
+        console.log(`[RTool] Detected assistant role from indicator: ${indicator} (keyword: ${keyword})`);
         return 'assistant';
       }
     }
@@ -226,7 +366,7 @@ function extractContent(element, selectors) {
 }
 
 // Check if message should be skipped based on filtering rules
-function shouldSkipMessage(element, content, filtering) {
+function shouldSkipMessage(element, content, filtering, role = null) {
   if (!filtering) return false;
 
   // PRIORITY 1: Check skip selectors (structural filtering)
@@ -247,8 +387,10 @@ function shouldSkipMessage(element, content, filtering) {
   }
 
   // PRIORITY 2: Check minimum response length (hard filter)
-  if (filtering.minResponseLength && content.length < filtering.minResponseLength) {
-    console.log(`[RTool] Skipping response too short (${content.length} < ${filtering.minResponseLength}): "${content}"`);
+  // IMPORTANT: Only apply to assistant responses, NOT user prompts
+  // User prompts can be any length, even a single character like "?"
+  if (role === 'assistant' && filtering.minResponseLength && content.length < filtering.minResponseLength) {
+    console.log(`[RTool] Skipping assistant response too short (${content.length} < ${filtering.minResponseLength}): "${content}"`);
     return true;
   }
 
@@ -320,48 +462,174 @@ function shouldSkipMessage(element, content, filtering) {
 function extractConversationMessagesFallback() {
   const messages = [];
   
+  console.log('[RTool] Starting fallback extraction');
+  
   // Try common patterns with proper role detection
   const commonSelectors = [
+    // ChatGPT specific
     { selector: '[data-message-author-role]', roleAttr: 'data-message-author-role' },
+    { selector: 'article[data-testid]', roleAttr: null },
+    { selector: '[data-testid*="conversation-turn"]', roleAttr: null },
+    { selector: '.group.w-full', roleAttr: null },
+    // Generic patterns
     { selector: '[class*="message"]', roleAttr: null },
     { selector: '[class*="chat"]', roleAttr: null },
-    { selector: '[data-testid*="message"]', roleAttr: null }
+    { selector: '[data-testid*="message"]', roleAttr: null },
+    { selector: 'div[class*="turn"]', roleAttr: null }
   ];
   
   for (const config of commonSelectors) {
-    const elements = document.querySelectorAll(config.selector);
-    if (elements.length > 0) {
-      console.log(`[RTool] Fallback found ${elements.length} messages with selector: ${config.selector}`);
-      elements.forEach(el => {
-        const content = el.innerText?.trim();
-        if (!content || content.length < 10) return;
+    try {
+      const elements = document.querySelectorAll(config.selector);
+      if (elements.length > 0) {
+        console.log(`[RTool] Fallback found ${elements.length} elements with selector: ${config.selector}`);
         
-        // Determine role
-        let role = 'assistant'; // Default
-        if (config.roleAttr) {
-          role = el.getAttribute(config.roleAttr) || 'assistant';
-        } else {
-          // Try to detect from class names
-          const classList = el.className?.toLowerCase() || '';
-          const dataAttrs = (el.getAttribute('data-test-id') || '').toLowerCase();
-          if (classList.includes('user') || dataAttrs.includes('user')) {
-            role = 'user';
-          } else if (classList.includes('assistant') || classList.includes('model') || classList.includes('bot') ||
-                     dataAttrs.includes('assistant') || dataAttrs.includes('model')) {
-            role = 'assistant';
+        elements.forEach((el, index) => {
+          const content = el.innerText?.trim();
+          if (!content || content.length < 10) {
+            console.log(`[RTool] Fallback: Skipping element ${index} (too short or empty)`);
+            return;
           }
-        }
+          
+          // Filter out JavaScript code and UI garbage
+          const looksLikeCode = (content.includes('window.') && content.includes('(')) ||
+                                (content.includes('window.') && content.includes('function')) ||
+                                (content.includes('__oai_')) ||
+                                (content.includes('Date.now')) ||
+                                (content.includes('requestAnimationFrame'));
+          
+          if (looksLikeCode) {
+            console.log(`[RTool] Fallback: Skipping element ${index} (looks like code):`, content.substring(0, 100));
+            return;
+          }
+          
+          // Filter out common UI elements
+          const uiPatterns = [
+            'Get Plus',
+            'ChatGPT said:',
+            'You said:',
+            'Temporary Chat',
+            'window.__oai_',
+            'requestAnimationFrame',
+            "won't appear in history",
+            'What can I help with?',
+            'How can I help',
+            'Get GPT',
+            'Upgrade',
+            'limit for GPT'
+          ];
+          
+          const contentLower = content.toLowerCase();
+          const isUIElement = uiPatterns.some(pattern => contentLower.includes(pattern.toLowerCase()));
+          
+          if (isUIElement) {
+            console.log(`[RTool] Fallback: Skipping element ${index} (UI element):`, content.substring(0, 100));
+            return;
+          }
+          
+          // Determine role
+          let role = null;
+          
+          // Method 1: Use role attribute if available
+          if (config.roleAttr) {
+            role = el.getAttribute(config.roleAttr);
+            console.log(`[RTool] Fallback: Element ${index} role from attribute: ${role}`);
+          }
+          
+          // Method 2: Check element and parent attributes/classes
+          if (!role) {
+            const classList = el.className?.toLowerCase() || '';
+            const dataTestId = (el.getAttribute('data-testid') || '').toLowerCase();
+            const dataId = (el.getAttribute('data-id') || '').toLowerCase();
+            const parentClass = el.parentElement?.className?.toLowerCase() || '';
+            const combined = `${classList} ${dataTestId} ${dataId} ${parentClass}`;
+            
+            console.log(`[RTool] Fallback: Element ${index} combined attributes: ${combined.substring(0, 100)}`);
+            
+            if (combined.includes('user')) {
+              role = 'user';
+            } else if (combined.includes('assistant') || combined.includes('model') || 
+                       combined.includes('bot') || combined.includes('agent') ||
+                       combined.includes('ai')) {
+              role = 'assistant';
+            }
+          }
+          
+          // Method 3: Alternating pattern (user, assistant, user, assistant...)
+          if (!role) {
+            role = messages.length % 2 === 0 ? 'user' : 'assistant';
+            console.log(`[RTool] Fallback: Element ${index} role from alternating pattern: ${role}`);
+          }
+          
+          console.log(`[RTool] Fallback: Adding message ${index} as ${role} (${content.length} chars)`);
+          messages.push({ role, content });
+        });
         
-        messages.push({ role, content });
-      });
-      
-      if (messages.length > 0) {
-        console.log(`[RTool] Fallback extracted ${messages.length} messages`);
-        return messages;
+        if (messages.length > 0) {
+          console.log(`[RTool] Fallback extracted ${messages.length} messages`);
+          return messages;
+        }
       }
+    } catch (e) {
+      console.warn(`[RTool] Fallback selector failed: ${config.selector}`, e);
     }
   }
   
-  console.warn('[RTool] Fallback extraction found no messages');
+  // Only log as warning if we're in a conversation page
+  const isConversationPage = window.location.href.includes('/c/');
+  if (isConversationPage) {
+    console.warn('[RTool] Fallback extraction found no messages');
+  } else {
+    console.log('[RTool] Fallback extraction found no messages (page may not be ready yet)');
+  }
   return messages;
 }
+
+// Global debugging function - call from console with: rtoolDebugDOM()
+window.rtoolDebugDOM = function() {
+  console.log('=== RTool DOM Debug ===');
+  console.log('Common selectors:');
+  console.log('  [data-message-author-role]:', document.querySelectorAll('[data-message-author-role]').length);
+  console.log('  article:', document.querySelectorAll('article').length);
+  console.log('  [data-testid]:', document.querySelectorAll('[data-testid]').length);
+  console.log('  [data-testid*="conversation"]:', document.querySelectorAll('[data-testid*="conversation"]').length);
+  console.log('  .group:', document.querySelectorAll('.group').length);
+  console.log('  .group.w-full:', document.querySelectorAll('.group.w-full').length);
+  
+  console.log('\nAll data-testid values:');
+  const testIds = new Set();
+  document.querySelectorAll('[data-testid]').forEach(el => {
+    testIds.add(el.getAttribute('data-testid'));
+  });
+  testIds.forEach(id => console.log('  -', id));
+  
+  console.log('\nMain structure:');
+  const main = document.querySelector('main');
+  if (main) {
+    console.log('  main exists with', main.children.length, 'children');
+    Array.from(main.children).slice(0, 5).forEach((child, i) => {
+      console.log(`  Child ${i}:`, child.tagName, child.className, 'data-testid:', child.getAttribute('data-testid'));
+    });
+  }
+  
+  console.log('\nSample message elements:');
+  const sampleSelectors = [
+    '[data-message-author-role="user"]',
+    '[data-message-author-role="assistant"]',
+    'article',
+    '.group.w-full'
+  ];
+  sampleSelectors.forEach(sel => {
+    const elements = document.querySelectorAll(sel);
+    if (elements.length > 0) {
+      console.log(`  ${sel}: ${elements.length} found`);
+      console.log('    First element:', elements[0]);
+      console.log('    Text preview:', elements[0].innerText?.substring(0, 100));
+    }
+  });
+  
+  console.log('======================');
+};
+
+console.log('[RTool] Debug function available: rtoolDebugDOM()');
+
